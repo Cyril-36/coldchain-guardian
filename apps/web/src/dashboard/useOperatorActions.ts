@@ -4,12 +4,26 @@ import { createApiEndpoints } from "../api/endpoints";
 import type { CreateReviewRequest, Review } from "../types/contracts";
 import { useAuth } from "../auth/AuthProvider";
 
+export interface RunCreationAttempt {
+  scenarioId: string;
+  seed: number;
+  idempotencyKey: string;
+}
+
+export function createRunAttempt(existing: RunCreationAttempt | null, scenarioId: string): RunCreationAttempt {
+  return existing ?? {
+    scenarioId,
+    seed: crypto.getRandomValues(new Uint32Array(1))[0],
+    idempotencyKey: crypto.randomUUID(),
+  };
+}
+
 export function useOperatorActions(runId: string | null) {
   const auth = useAuth();
   const [reviewSubmitting, setReviewSubmitting] = useState(false);
   const [review, setReview] = useState<Review | null>(null);
   const [error, setError] = useState<Error | null>(null);
-  const runRequestRef = useRef<{ scenarioId: string; seed: number; idempotencyKey: string } | null>(null);
+  const runRequestRef = useRef<RunCreationAttempt | null>(null);
 
   const getApi = useCallback(() => {
     if (!auth.authenticated) throw new Error("Operator session is required");
@@ -26,15 +40,8 @@ export function useOperatorActions(runId: string | null) {
       const scenario = scenarios[0];
       if (!scenario) throw new Error("No investigation scenarios are available");
 
-      const request = runRequestRef.current ?? (() => {
-        const next = {
-          scenarioId: scenario.scenario_id,
-          seed: crypto.getRandomValues(new Uint32Array(1))[0],
-          idempotencyKey: crypto.randomUUID(),
-        };
-        runRequestRef.current = next;
-        return next;
-      })();
+      const request = createRunAttempt(runRequestRef.current, scenario.scenario_id);
+      runRequestRef.current = request;
 
       const result = await api.createRun({ scenario_id: request.scenarioId, seed: request.seed }, request.idempotencyKey);
       runRequestRef.current = null;
