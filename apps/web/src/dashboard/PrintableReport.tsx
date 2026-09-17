@@ -5,11 +5,12 @@ function utc(value: string | null | undefined) {
   return new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }).format(new Date(value)) + " UTC";
 }
 function duration(seconds: number | null | undefined) { return seconds == null ? "—" : `${Math.floor(seconds / 60)} min`; }
+export function resolveReview(runReview: Review | null, reviewOverride?: Review | null) { return reviewOverride ?? runReview; }
 
 export function PrintableReport({ run, snapshot, report, reviewOverride }: { run: Run; snapshot: Snapshot; report: Report; reviewOverride?: Review | null }) {
   const measurement = report.measurements[0];
   const primary = report.hypotheses.find((item) => item.hypothesis === report.primary_hypothesis);
-  const review = reviewOverride ?? run.review;
+  const review = resolveReview(run.review, reviewOverride);
   return <section className="print-report" aria-labelledby="print-report-title">
     <header className="print-report-header"><div><p className="print-kicker">ColdChain Guardian</p><h1 id="print-report-title">Cold-chain investigation report</h1><p>Evidence-backed investigation record · simulated shipment</p></div><div className="print-meta"><strong>Run</strong><span>{run.run_id}</span><strong>Report</strong><span>{report.report_id}</span></div></header>
     <div className="print-grid"><div><strong>Shipment</strong><span>{run.shipment_id}</span></div><div><strong>Policy</strong><span>{snapshot.policy.policy_id} · {snapshot.policy.policy_version}</span></div><div><strong>Configured range</strong><span>{snapshot.policy.min_c}°C–{snapshot.policy.max_c}°C</span></div><div><strong>Cutoff</strong><span>{utc(snapshot.cutoff_at)}</span></div></div>
