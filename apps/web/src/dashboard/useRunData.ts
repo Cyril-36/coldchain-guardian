@@ -35,6 +35,7 @@ function shouldRetry(error: unknown) {
 
 export function useRunData(): RunData {
   const [retryNonce, setRetryNonce] = useState(0);
+  const retry = () => setRetryNonce((value) => value + 1);
   const [data, setData] = useState<RunData>({
     run: demoRun,
     snapshot: demoSnapshot,
@@ -44,7 +45,7 @@ export function useRunData(): RunData {
     reportReady: true,
     loading: false,
     error: null,
-    retry: () => setRetryNonce((value) => value + 1),
+    retry,
   });
 
   useEffect(() => {
@@ -57,11 +58,6 @@ export function useRunData(): RunData {
     const startedAt = Date.now();
     const client = new ApiClient({ baseUrl });
     const api = createApiEndpoints(client);
-
-    setData((current) => ({
-      ...current,
-      retry: () => setRetryNonce((value) => value + 1),
-    }));
 
     const clearPollTimer = () => {
       if (pollTimer !== undefined) {
@@ -80,8 +76,8 @@ export function useRunData(): RunData {
 
       const snapshotReady = snapshotResult.status === "fulfilled";
       const reportReady = reportResult.status === "fulfilled";
-      const artifactError = currentRun.status !== "failed" && (!snapshotReady || !reportReady)
-        ? new Error("Investigation artifacts are not ready yet")
+      const artifactError = isTerminal(currentRun.status) && (!snapshotReady || !reportReady)
+        ? new Error("Investigation artifacts are unavailable")
         : null;
 
       setData((current) => ({
@@ -94,6 +90,7 @@ export function useRunData(): RunData {
         reportReady: reportReady || current.reportReady,
         loading: false,
         error: artifactError,
+        retry,
       }));
     };
 
@@ -104,13 +101,7 @@ export function useRunData(): RunData {
         const run = await api.getRun(runId);
         if (cancelled) return;
 
-        setData((current) => ({
-          ...current,
-          run,
-          source: "api",
-          loading: false,
-          error: null,
-        }));
+        setData((current) => ({ ...current, run, source: "api", loading: false, error: null, retry }));
 
         if (isTerminal(run.status)) {
           clearPollTimer();
@@ -128,6 +119,7 @@ export function useRunData(): RunData {
           ...current,
           loading: false,
           error: error instanceof Error ? error : new Error("Unable to refresh investigation data"),
+          retry,
         }));
 
         if (shouldRetry(error)) {
@@ -142,26 +134,17 @@ export function useRunData(): RunData {
 
     const handleVisibilityChange = () => {
       clearPollTimer();
-      if (document.visibilityState === "visible") {
-        void poll();
-      }
+      if (document.visibilityState === "visible") void poll();
     };
 
     const initialise = async () => {
-      setData((current) => ({
-        ...current,
-        source: "api",
-        snapshotReady: false,
-        reportReady: false,
-        loading: true,
-        error: null,
-      }));
+      setData((current) => ({ ...current, source: "api", snapshotReady: false, reportReady: false, loading: true, error: null, retry }));
 
       try {
         const run = await api.getRun(runId);
         if (cancelled) return;
 
-        setData((current) => ({ ...current, run, source: "api", loading: true, error: null }));
+        setData((current) => ({ ...current, run, source: "api", loading: true, error: null, retry }));
         await hydrateArtifacts(run);
         if (cancelled) return;
 
@@ -176,6 +159,7 @@ export function useRunData(): RunData {
             reportReady: false,
             loading: false,
             error: error instanceof Error ? error : new Error("Unable to load investigation data"),
+            retry,
           }));
         }
       }
