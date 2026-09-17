@@ -1,74 +1,61 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { demoReport, demoRun, demoSnapshot } from "./mockData";
-import "./dashboard.css";
+import { TelemetryChart } from "./TelemetryChart";
+import { useRunData } from "./useRunData";
+import type { Report, Snapshot } from "../types/contracts";
 
-const stages = [
-  ["Preparing", "Complete"],
-  ["Detecting", "Complete"],
-  ["Collecting evidence", "Complete"],
-  ["Comparing hypotheses", "Complete"],
-  ["Verifying", "Complete"],
-  ["Ready", "Current"],
-] as const;
+const stageLabels: Record<string, string> = { preparing: "Preparing", detecting: "Detecting", collecting_evidence: "Collecting evidence", comparing_hypotheses: "Comparing hypotheses", verifying: "Verifying", ready: "Ready", failed: "Failed" };
 
-function formatTime(value: string) {
-  return new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" }).format(new Date(value));
-}
+function formatTime(value: string) { return new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" }).format(new Date(value)); }
+function formatDuration(seconds: number | null) { return seconds == null ? "—" : `${Math.floor(seconds / 60)} min`; }
 
 function MetricCard({ label, value, detail, tone }: { label: string; value: string; detail: string; tone: "critical" | "review" | "info" }) {
-  return <article className="metric-card"><p className="eyebrow">{label}</p><p className="metric-value">{value}</p><p className={`metric-detail ${tone}`}>{detail}</p></article>;
+  return <article className="rounded-[10px] border border-slate-200 bg-white p-4 shadow-sm"><p className="text-xs font-semibold text-slate-600">{label}</p><p className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">{value}</p><p className={`mt-1 text-[11px] font-medium ${tone === "critical" ? "text-red-700" : tone === "review" ? "text-amber-700" : "text-cyan-700"}`}>{detail}</p></article>;
 }
 
-function TelemetryChart() {
-  const { readings, policy } = demoSnapshot;
-  const width = 1000;
-  const height = 270;
-  const pad = { left: 52, right: 24, top: 24, bottom: 38 };
-  const range = Math.max(10, policy.max_c + 2);
-  const x = (i: number) => pad.left + (i / Math.max(1, readings.length - 1)) * (width - pad.left - pad.right);
-  const y = (v: number) => pad.top + ((range - v) / range) * (height - pad.top - pad.bottom);
-  const series = useMemo(() => readings.filter((_, i) => i % 2 === 0), [readings]);
-  const points = series.map((r, i) => `${x(i * 2)},${y(r.temperature_c)}`).join(" ");
-  const policyTop = y(policy.max_c);
-  const policyBottom = y(policy.min_c);
+function outcomeCopy(report: Report) {
+  if (report.outcome === "no_excursion") return { title: "No excursion detected", detail: "The deterministic measurements did not report an out-of-range excursion." };
+  if (report.outcome === "unresolved") return { title: "Investigation remains unresolved", detail: "Available evidence is insufficient to support a primary explanation." };
+  const finding = report.hypotheses.find((item) => item.hypothesis === report.primary_hypothesis);
+  return { title: "Temperature exceeded the configured limit", detail: finding?.explanation ?? "A supported explanation is recorded in the report." };
+}
 
-  return <div className="card telemetry-card">
-    <div className="panel-heading"><div><h2>Temperature telemetry</h2><p>Configured band · {policy.min_c}°C–{policy.max_c}°C · both sensors · UTC</p></div><div className="legend"><span className="sensor-a">● Sensor A</span><span className="sensor-b">● Sensor B</span><span>▰ Policy band</span></div></div>
-    <div className="chart-shell"><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Temperature telemetry chart with configured policy band and sensor readings">
-      <rect x={pad.left} y={policyTop} width={width - pad.left - pad.right} height={policyBottom - policyTop} className="policy-band" />
-      {[0, 2, 4, 6, 8, 10].map(v => <g key={v}><line x1={pad.left} x2={width - pad.right} y1={y(v)} y2={y(v)} className="gridline" /><text x="12" y={y(v) + 4} className="axis-label">{v}°C</text></g>)}
-      <polyline points={points} className="series-a" />
-      {series.map((r, i) => <circle key={r.event_id} cx={x(i * 2)} cy={y(r.temperature_c)} r="3.5" className={r.temperature_c > policy.max_c ? "point-critical" : "point-a"} />)}
-      <line x1={x(6)} x2={x(6)} y1="28" y2={height - pad.bottom} className="event-line" />
-      <rect x={x(6) - 48} y="18" width="96" height="24" rx="6" className="event-label-bg" /><text x={x(6) - 39} y="34" className="event-label">Door opened · 12:18</text>
-      <line x1={x(15)} x2={x(15)} y1={height - 60} y2={height - pad.bottom} className="gap-line" /><text x={x(15) - 30} y={height - 12} className="gap-label">Gap · 4 min</text>
-      <text x={pad.left} y={height - 12} className="axis-label">12:00</text><text x={width - pad.right - 42} y={height - 12} className="axis-label">14:32</text>
-    </svg></div>
-    <div className="chart-note"><span>Peak observed at 9.4°C</span><p>Estimated duration may be incomplete because the window contains a telemetry gap.</p></div>
-  </div>;
+function fixtureEvidence(snapshot: Snapshot) {
+  const door = snapshot.events.find((event) => event.event_type === "door_state");
+  const gap = snapshot.events.find((event) => event.value.includes("telemetry gap"));
+  const reference = snapshot.sensors.find((sensor) => sensor.role === "reference");
+  const comparison = snapshot.sensors.find((sensor) => sensor.role === "comparison");
+  const peak = snapshot.readings.find((reading) => reading.sensor_id === reference?.sensor_id && reading.temperature_c > snapshot.policy.max_c);
+  const comparisonReading = snapshot.readings.find((reading) => reading.sensor_id === comparison?.sensor_id);
+  return [
+    door && { key: door.event_id, title: "Door event", detail: `${formatTime(door.observed_at)} UTC · ${door.value}`, tone: "green" as const, recordIds: [door.event_id] },
+    peak && { key: peak.event_id, title: "Temperature peak", detail: `${peak.temperature_c}°C · Sensor A`, tone: "green" as const, recordIds: [peak.event_id] },
+    comparisonReading && { key: comparisonReading.event_id, title: "Sensor B", detail: `${comparisonReading.temperature_c}°C · comparison`, tone: "amber" as const, recordIds: [comparisonReading.event_id] },
+    gap && { key: gap.event_id, title: "Data gap", detail: `${formatTime(gap.observed_at)} UTC · ${gap.value}`, tone: "amber" as const, recordIds: [gap.event_id] },
+  ].filter(Boolean);
 }
 
 export function DashboardPage() {
-  const report = demoReport;
-  const finding = report.hypotheses.find(h => h.hypothesis === report.primary_hypothesis);
-  const evidence = [
-    ["Door event", "12:18 UTC · opened for 11 min", "Supports door exposure", "green"],
-    ["Temperature peak", "9.4°C · Sensor A", "Supports excursion", "green"],
-    ["Sensor B", "7.8°C · same interval", "Conflicting / lower magnitude", "amber"],
-    ["Data gap", "13:02–13:06 UTC", "Limits duration estimate", "amber"],
-  ] as const;
+  const live = useRunData();
+  const run = live.source === "api" ? live.run : demoRun;
+  const snapshot = live.source === "api" ? live.snapshot : demoSnapshot;
+  const report = live.source === "api" ? live.report : demoReport;
+  const [selectedRecordIds, setSelectedRecordIds] = useState<Set<string>>(new Set());
+  const [reviewNote, setReviewNote] = useState("");
+  const primaryMeasurement = report.measurements[0];
+  const copy = outcomeCopy(report);
+  const finding = report.hypotheses.find((item) => item.hypothesis === report.primary_hypothesis);
+  const evidence = useMemo(() => report.evidence.length > 0 ? report.evidence : fixtureEvidence(snapshot), [report.evidence, snapshot]);
 
-  return <main className="app-shell"><div className="dashboard">
-    <header className="header card"><div className="brand"><h1>ColdChain Guardian</h1><p>Simulated shipment · AWS-backed processing</p></div><div className="header-spacer" /><label className="case-label">Demo case<select defaultValue="door"><option value="door">Door exposure · Run 1042</option></select></label><button className="btn btn-primary">Run investigation</button><div className="avatar" aria-label="Operator">NG</div></header>
-    <div className="context"><strong>Shipment SHP-2048</strong><span>Policy CC-2.4 · {demoSnapshot.policy.min_c}°C–{demoSnapshot.policy.max_c}°C</span><span className="muted">Cutoff 17 Sep 2026 · 14:32 UTC</span><span className="simulated">SIMULATED</span></div>
-    <section className="metric-grid"><MetricCard label="Observed peak" value="9.4°C" detail="Above configured limit" tone="critical" /><MetricCard label="Estimated time out of range" value="18 min" detail="Censored at window edge" tone="review" /><MetricCard label="Data coverage" value="96%" detail="1 gap · 4 min" tone="info" /><MetricCard label="Review status" value="Needs review" detail="Evidence ready" tone="review" /></section>
-    <TelemetryChart />
-    <section className="lower-grid">
-      <article className="card stages"><h2>Investigation stages</h2><div className="stage-list">{stages.map(([name, status], index) => <div className="stage-row" key={name}><span className={`stage-dot ${index === stages.length - 1 ? "current" : "complete"}`} /><span className="stage-name">{name}</span><span className={`stage-status ${index === stages.length - 1 ? "current-text" : "complete-text"}`}>{status}</span></div>)}</div></article>
-      <article className="card finding"><h2>Main finding</h2><div className="finding-box"><p className="finding-title">Temperature exceeded the configured limit</p><p>Possible explanation: {finding?.explanation} Evidence supports the hypothesis but does not establish disposition.</p></div><div className="next-checks"><h3>Next checks</h3><ul>{report.next_checks.map(check => <li key={check.code}>{check.reason}</li>)}</ul></div></article>
-      <article className="card evidence"><h2>Supporting &amp; conflicting evidence</h2><div className="evidence-list">{evidence.map(([title, detail, status, tone]) => <button key={title} className="evidence-item"><strong>{title}</strong><span>{detail}</span><em className={tone}>{status}</em></button>)}</div></article>
-    </section>
-    <section className="review-grid"><article className="card review"><div className="review-heading"><div><h2>Operator review</h2><p>Add a note and acknowledge or request more evidence.</p></div><div className="actions"><button className="btn btn-primary">Acknowledge review</button><button className="btn btn-secondary">Request evidence</button></div></div><textarea maxLength={1000} placeholder="Add review note…" aria-label="Review note" /></article><article className="card report"><div className="report-heading"><div><h2>Report ready</h2><p>Evidence references and measurements checked</p></div><button className="btn btn-primary">Download</button></div><small>IDs, request IDs and raw service names live in expandable diagnostics.</small></article></section>
-    <p className="footer-note">Run {demoRun.run_id} · Last updated {formatTime(demoRun.completed_at!)} UTC</p>
+  return <main className="min-h-screen bg-slate-50 text-slate-950"><div className="mx-auto max-w-[1440px] p-5 lg:p-8">
+    {live.source === "fixture" && <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-xs font-medium text-amber-800">Demo fixture mode — no live backend data is being shown.</div>}
+    {live.error && <div role="alert" className="mb-3 rounded-md border border-red-200 bg-red-50 px-4 py-2 text-xs font-medium text-red-800">Live run could not be loaded. Showing demo fixture data.</div>}
+    <header className="flex flex-wrap items-center gap-4 rounded-[10px] border border-slate-200 bg-white px-6 py-4 shadow-sm"><div className="min-w-[240px] flex-1"><h1 className="text-xl font-semibold">ColdChain Guardian</h1><p className="text-xs text-slate-400">Simulated shipment · AWS-backed processing</p></div><label className="text-xs font-semibold text-slate-600">Demo case<select defaultValue="door" className="ml-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-normal text-slate-950"><option value="door">Door exposure · Run 1042</option></select></label><button type="button" className="rounded-md bg-[#123B5D] px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#0F304C]">Run investigation</button><div className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-50 text-xs font-semibold text-[#123B5D]">NG</div></header>
+    <div className="flex flex-wrap gap-x-6 gap-y-2 px-1 py-3 text-xs"><span className="font-semibold text-slate-600">Shipment {run.shipment_id.slice(-8)}</span><span className="text-slate-600">Policy {snapshot.policy.policy_id}-{snapshot.policy.policy_version} · {snapshot.policy.min_c}°C–{snapshot.policy.max_c}°C</span><span className="text-slate-400">Cutoff {new Date(snapshot.cutoff_at).toLocaleDateString("en-GB")} · {formatTime(snapshot.cutoff_at)} UTC</span><span className="rounded px-2 py-1 font-semibold text-amber-700 bg-amber-50">SIMULATED</span></div>
+    <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4"><MetricCard label="Observed peak" value={primaryMeasurement?.observed_max_c == null ? "—" : `${primaryMeasurement.observed_max_c}°C`} detail={primaryMeasurement?.observed_max_c != null && primaryMeasurement.observed_max_c > snapshot.policy.max_c ? "Above configured limit" : "Within configured limit"} tone={primaryMeasurement?.observed_max_c != null && primaryMeasurement.observed_max_c > snapshot.policy.max_c ? "critical" : "info"} /><MetricCard label="Estimated time out of range" value={formatDuration(primaryMeasurement?.estimated_out_of_range_seconds ?? null)} detail={primaryMeasurement?.censored_start || primaryMeasurement?.censored_end ? "Censored at window edge" : "Backend measurement"} tone="review" /><MetricCard label="Data coverage" value={primaryMeasurement?.coverage_status ?? "—"} detail={primaryMeasurement?.unknown_duration_seconds ? `${formatDuration(primaryMeasurement.unknown_duration_seconds)} unknown` : "No unknown duration reported"} tone="info" /><MetricCard label="Review status" value={report.review_required ? "Needs review" : "No review required"} detail={report.verification.status === "passed" ? "Evidence references checked" : "Verification blocked"} tone={report.review_required ? "review" : "info"} /></section>
+    <section className="mt-3"><TelemetryChart snapshot={snapshot} highlightedRecordIds={selectedRecordIds} onRecordSelect={(ids) => setSelectedRecordIds(new Set(ids))} /></section>
+    <section className="mt-3 grid gap-3 lg:grid-cols-[0.9fr_1fr_1.05fr]"><article className="rounded-[10px] border border-slate-200 bg-white p-5 shadow-sm"><h2 className="text-lg font-semibold">Investigation stages</h2><div className="mt-5 space-y-3">{run.stage_events.length > 0 ? run.stage_events.map((stage) => <div key={stage.event_id} className="flex items-center gap-3"><span className={`h-2.5 w-2.5 rounded-full ${stage.status === "failed" ? "bg-red-700" : stage.status === "completed" ? "bg-green-700" : "bg-amber-600"}`} /><span className="flex-1 text-xs font-semibold">{stageLabels[stage.stage]}</span><span className="text-[11px] text-slate-500">{stage.status}</span></div>) : <div className="flex items-center gap-3"><span className="h-2.5 w-2.5 rounded-full bg-green-700" /><span className="flex-1 text-xs font-semibold">{stageLabels[run.stage]}</span><span className="text-[11px] text-green-700">Current</span></div>}</div></article><article className="rounded-[10px] border border-slate-200 bg-white p-5 shadow-sm"><h2 className="text-lg font-semibold">Main finding</h2><div className="mt-4 rounded-lg bg-slate-50 p-4"><p className="text-sm font-semibold text-red-700">{copy.title}</p><p className="mt-2 text-xs leading-5 text-slate-600">{copy.detail}</p>{finding && <p className="mt-2 text-[11px] font-medium text-amber-700">Evidence supports the hypothesis but does not establish disposition.</p>}</div><div className="mt-4"><h3 className="text-xs font-semibold text-slate-600">Next checks</h3><ul className="mt-2 space-y-2 text-xs">{report.next_checks.map((check) => <li key={check.code}>• {check.reason}</li>)}</ul></div></article><article className="rounded-[10px] border border-slate-200 bg-white p-5 shadow-sm"><h2 className="text-lg font-semibold">Supporting &amp; conflicting evidence</h2><div className="mt-4 space-y-2">{evidence.map((item) => { const isReportEvidence = "evidence_id" in item; const recordIds = item.record_ids; const active = recordIds.some((id) => selectedRecordIds.has(id)); const title = isReportEvidence ? item.summary : item.title; const detail = isReportEvidence ? (item.interval ? `${formatTime(item.interval.start_at)}–${formatTime(item.interval.end_at)} UTC` : item.observed_at ? `${formatTime(item.observed_at)} UTC` : "Evidence reference") : item.detail; return <button key={isReportEvidence ? item.evidence_id : item.key} type="button" onClick={() => setSelectedRecordIds(new Set(recordIds))} className={`w-full rounded-md p-3 text-left transition ${active ? "bg-amber-50 ring-1 ring-amber-300" : "bg-slate-50 hover:bg-slate-100"}`}><p className="text-[11px] font-semibold">{title}</p><p className="mt-1 text-[11px] text-slate-600">{detail}</p><p className={`mt-1 text-[10px] font-semibold ${isReportEvidence ? "text-slate-500" : item.tone === "green" ? "text-green-700" : "text-amber-700"}`}>{isReportEvidence ? item.kind.replace("_", " ") : item.tone === "green" ? "Supporting evidence" : "Limitation / conflict"}</p></button>; })}</div></article></section>
+    <section className="mt-3 grid gap-3 lg:grid-cols-[2fr_1fr]"><article className="rounded-[10px] border border-slate-200 bg-white p-5 shadow-sm"><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-base font-semibold">Operator review</h2><p className="text-[11px] text-slate-500">Add a note and acknowledge or request more evidence.</p></div><div className="flex gap-2"><button type="button" disabled={!reviewNote.trim()} className="rounded-md bg-[#123B5D] px-3 py-2 text-[11px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">Acknowledge review</button><button type="button" disabled={!reviewNote.trim()} className="rounded-md border border-slate-200 px-3 py-2 text-[11px] font-semibold text-[#123B5D] disabled:cursor-not-allowed disabled:opacity-50">Request evidence</button></div></div><textarea value={reviewNote} onChange={(event) => setReviewNote(event.target.value)} maxLength={1000} placeholder="Add review note…" aria-label="Review note" className="mt-3 h-14 w-full resize-none rounded-md border border-slate-200 bg-slate-50 p-3 text-xs outline-none focus:border-slate-400" /><p className="mt-1 text-right text-[10px] text-slate-400">{reviewNote.length}/1000</p></article><article className="rounded-[10px] border border-slate-200 bg-white p-5 shadow-sm"><div className="flex items-center justify-between gap-3"><div><h2 className="text-base font-semibold">Report ready</h2><p className="mt-1 text-[10px] font-medium text-green-700">{report.verification.status === "passed" ? "Evidence references and measurements checked" : "Verification blocked"}</p></div><button type="button" className="rounded-md bg-[#123B5D] px-3 py-2 text-[11px] font-semibold text-white">Download</button></div><p className="mt-3 text-[10px] text-slate-500">IDs, request IDs and raw service names live in expandable diagnostics.</p></article></section>
+    <p className="mt-4 text-[10px] text-slate-400">Run {run.run_id} · {live.loading ? "Loading live data…" : `Last updated ${formatTime(run.completed_at ?? run.created_at)} UTC`}</p>
   </div></main>;
 }
