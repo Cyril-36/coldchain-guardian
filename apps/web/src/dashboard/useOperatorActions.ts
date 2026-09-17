@@ -20,6 +20,7 @@ export function createRunAttempt(existing: RunCreationAttempt | null, scenarioId
 
 export function useOperatorActions(runId: string | null) {
   const auth = useAuth();
+  const [runCreating, setRunCreating] = useState(false);
   const [reviewSubmitting, setReviewSubmitting] = useState(false);
   const [review, setReview] = useState<Review | null>(null);
   const [error, setError] = useState<Error | null>(null);
@@ -33,6 +34,8 @@ export function useOperatorActions(runId: string | null) {
   }, [auth.authenticated, auth.getAccessToken]);
 
   const createRun = useCallback(async () => {
+    if (runCreating) return;
+    setRunCreating(true);
     setError(null);
     try {
       const api = getApi();
@@ -50,8 +53,10 @@ export function useOperatorActions(runId: string | null) {
       const nextError = cause instanceof Error ? cause : new Error("Unable to start investigation");
       setError(nextError);
       throw nextError;
+    } finally {
+      setRunCreating(false);
     }
-  }, [getApi]);
+  }, [getApi, runCreating]);
 
   const submitReview = useCallback(async (request: CreateReviewRequest) => {
     if (!runId) throw new Error("A protected run is required");
@@ -68,5 +73,5 @@ export function useOperatorActions(runId: string | null) {
     catch (cause) { const nextError = cause instanceof Error ? cause : new Error("Unable to download report"); setError(nextError); throw nextError; }
   }, [getApi, runId]);
 
-  return { reviewSubmitting, review, error, createRun, submitReview, downloadReport };
+  return { runCreating, reviewSubmitting, review, error, createRun, submitReview, downloadReport };
 }
