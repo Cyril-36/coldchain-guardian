@@ -30,41 +30,22 @@ jobs:
       - name: Frontend checks, when frontend exists
         shell: bash
         run: |
-          set +e
-          : > frontend-check.log
-          exec > >(tee -a frontend-check.log) 2>&1
-          if [ ! -f apps/web/package.json ]; then
+          set -euo pipefail
+          if [ -f apps/web/package.json ]; then
+            cd apps/web
+            npm install --no-audit --no-fund
+            if npm run | grep -qE '^  lint'; then
+              npm run lint
+            else
+              echo 'Frontend lint script not implemented yet; skipped.'
+            fi
+            npm run typecheck
+            if npm run | grep -qE '^  test'; then
+              npm test -- --run
+            else
+              echo 'Frontend tests not implemented yet; skipped.'
+            fi
+            npm run build
+          else
             echo 'Frontend not implemented yet; skipped.'
-            exit 0
           fi
-          cd apps/web
-          npm install --no-audit --no-fund
-          status=$?
-          if [ $status -ne 0 ]; then exit $status; fi
-          if npm run | grep -qE '^  lint'; then
-            npm run lint
-            status=$?
-            if [ $status -ne 0 ]; then exit $status; fi
-          else
-            echo 'Frontend lint script not implemented yet; skipped.'
-          fi
-          npm run typecheck
-          status=$?
-          if [ $status -ne 0 ]; then exit $status; fi
-          if npm run | grep -qE '^  test'; then
-            npm test -- --run
-            status=$?
-            if [ $status -ne 0 ]; then exit $status; fi
-          else
-            echo 'Frontend tests not implemented yet; skipped.'
-          fi
-          npm run build
-          status=$?
-          exit $status
-      - name: Upload frontend check log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: frontend-check-log
-          path: frontend-check.log
-          if-no-files-found: ignore
