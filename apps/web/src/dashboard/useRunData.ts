@@ -10,6 +10,8 @@ interface RunData {
   snapshot: Snapshot;
   report: Report;
   source: "api" | "fixture";
+  snapshotReady: boolean;
+  reportReady: boolean;
   loading: boolean;
   error: Error | null;
 }
@@ -36,6 +38,8 @@ export function useRunData(): RunData {
     snapshot: demoSnapshot,
     report: demoReport,
     source: "fixture",
+    snapshotReady: true,
+    reportReady: true,
     loading: false,
     error: null,
   });
@@ -66,19 +70,17 @@ export function useRunData(): RunData {
 
       if (cancelled) return;
 
-      setData((current) => {
-        const snapshot = snapshotResult.status === "fulfilled" ? snapshotResult.value : current.snapshot;
-        const report = reportResult.status === "fulfilled" ? reportResult.value : current.report;
-        return {
-          ...current,
-          run: currentRun,
-          snapshot,
-          report,
-          source: "api",
-          loading: false,
-          error: null,
-        };
-      });
+      setData((current) => ({
+        ...current,
+        run: currentRun,
+        snapshot: snapshotResult.status === "fulfilled" ? snapshotResult.value : current.snapshot,
+        report: reportResult.status === "fulfilled" ? reportResult.value : current.report,
+        source: "api",
+        snapshotReady: snapshotResult.status === "fulfilled" || current.snapshotReady,
+        reportReady: reportResult.status === "fulfilled" || current.reportReady,
+        loading: false,
+        error: null,
+      }));
     };
 
     const poll = async () => {
@@ -132,7 +134,14 @@ export function useRunData(): RunData {
     };
 
     const initialise = async () => {
-      setData((current) => ({ ...current, source: "api", loading: true, error: null }));
+      setData((current) => ({
+        ...current,
+        source: "api",
+        snapshotReady: false,
+        reportReady: false,
+        loading: true,
+        error: null,
+      }));
 
       try {
         const run = await api.getRun(runId);
@@ -140,19 +149,18 @@ export function useRunData(): RunData {
 
         setData((current) => ({ ...current, run, source: "api", loading: true, error: null }));
 
-        if (isTerminal(run.status)) {
-          await hydrateArtifacts(run);
-          return;
-        }
-
         await hydrateArtifacts(run);
         if (cancelled) return;
+
+        if (isTerminal(run.status)) return;
         pollTimer = window.setTimeout(() => void poll(), ACTIVE_POLL_MS);
       } catch (error: unknown) {
         if (!cancelled) {
           setData((current) => ({
             ...current,
             source: "api",
+            snapshotReady: false,
+            reportReady: false,
             loading: false,
             error: error instanceof Error ? error : new Error("Unable to load investigation data"),
           }));
