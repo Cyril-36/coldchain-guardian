@@ -1,5 +1,6 @@
 const STORAGE_KEY = "coldchain_guardian_auth";
 const PKCE_KEY = "coldchain_guardian_pkce_verifier";
+const RETURN_TO_KEY = "coldchain_guardian_return_to";
 
 export interface AuthSession {
   accessToken: string;
@@ -58,6 +59,7 @@ function saveSession(session: AuthSession) {
 function clearSession() {
   sessionStorage.removeItem(STORAGE_KEY);
   sessionStorage.removeItem(PKCE_KEY);
+  sessionStorage.removeItem(RETURN_TO_KEY);
 }
 
 export function getStoredAccessToken() {
@@ -71,6 +73,7 @@ export async function beginSignIn() {
   const verifier = randomVerifier();
   const challenge = await createCodeChallenge(verifier);
   sessionStorage.setItem(PKCE_KEY, verifier);
+  sessionStorage.setItem(RETURN_TO_KEY, `${window.location.pathname}${window.location.search}`);
 
   const params = new URLSearchParams({
     response_type: "code",
@@ -112,7 +115,10 @@ export async function completeSignIn(code: string) {
     expiresAt: Date.now() + body.expires_in * 1000,
   });
   sessionStorage.removeItem(PKCE_KEY);
-  window.history.replaceState({}, document.title, settings.redirectUri);
+
+  const returnTo = sessionStorage.getItem(RETURN_TO_KEY) ?? "/";
+  sessionStorage.removeItem(RETURN_TO_KEY);
+  window.history.replaceState({}, document.title, returnTo);
   return body.access_token;
 }
 
