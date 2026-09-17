@@ -1,0 +1,12 @@
+# Ownership reference. Review is required by branch protection; code-owner approval is not required because Cyril also authors PRs.
+/PLAN.md @Cyril-36
+/docs/CONTRACTS.md @Cyril-36
+/docs/01-CYRIL.md @Cyril-36
+/docs/02-HARSHITH.md @Cyril-36
+/docs/03-NAVADEEP.md @Cyril-36
+/backend/coldchain/contracts/ @Cyril-36
+/backend/coldchain/core/ @Cyril-36
+/backend/coldchain/investigation/ @Cyril-36
+/backend/coldchain/worker/ @Cyril-36
+/infra/ @Cyril-36
+/eval/ @Cyril-36
