@@ -1,0 +1,133 @@
+import { useMemo } from "react";
+import { CartesianGrid, Line, LineChart, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import type { Snapshot } from "../types/contracts";
+interface ChartPoint { observed_at: string; timestamp: number; sensor_a: number | null; sensor_b: number | null; sensor_a_event_id: string | null; sensor_b_event_id: string | null; }
+export interface SensorPoint { observed_at: string; timestamp: number; temperature: number | null; event_id: string | null; }
+interface Gap { start: number; end: number; sensor: "A" | "B"; }
+interface TelemetryChartProps { snapshot: Snapshot; highlightedRecordIds?: Set<string>; onRecordSelect?: (recordIds: string[]) => void; }
+function buildSeries(snapshot: Snapshot): ChartPoint[] { const byTime = new Map<number, ChartPoint>(); for (const reading of snapshot.readings) { const timestamp = Date.parse(reading.observed_at); const point = byTime.get(timestamp) ?? { observed_at: reading.observed_at, timestamp, sensor_a: null, sensor_b: null, sensor_a_event_id: null, sensor_b_event_id: null }; const sensor = snapshot.sensors.find((item) => item.sensor_id === reading.sensor_id); if (sensor?.role === "reference") { point.sensor_a = reading.temperature_c; point.sensor_a_event_id = reading.event_id; } if (sensor?.role === "comparison") { point.sensor_b = reading.temperature_c; point.sensor_b_event_id = reading.event_id; } byTime.set(timestamp, point); } return [...byTime.values()].sort((a, b) => a.timestamp - b.timestamp); }
+export function buildSensorSeries(snapshot: Snapshot, role: "reference" | "comparison", gaps: Gap[]): SensorPoint[] { const sensor = snapshot.sensors.find((item) => item.role === role); if (!sensor) return []; const readings = snapshot.readings.filter((reading) => reading.sensor_id === sensor.sensor_id).sort((a, b) => Date.parse(a.observed_at) - Date.parse(b.observed_at)); const sensorGaps = gaps.filter((gap) => gap.sensor === (role === "reference" ? "A" : "B")); const points: SensorPoint[] = []; readings.forEach((reading, index) => { points.push({ observed_at: reading.observed_at, timestamp: Date.parse(reading.observed_at), temperature: reading.temperature_c, event_id: reading.event_id }); if (index < readings.length - 1) { const start = Date.parse(reading.observed_at); const end = Date.parse(readings[index + 1].observed_at); if (sensorGaps.some((gap) => gap.start === start && gap.end === end)) points.push({ observed_at: new Date(start + (end - start) / 2).toISOString(), timestamp: start + (end - start) / 2, temperature: null, event_id: null }); } }); return points; }
+export function getSensorGaps(snapshot: Snapshot): Gap[] { return snapshot.sensors.flatMap((sensor) => { const readings = snapshot.readings.filter((reading) => reading.sensor_id === sensor.sensor_id).sort((a, b) => Date.parse(a.observed_at) - Date.parse(b.observed_at)); const gaps: Gap[] = []; for (let index = 1; index < readings.length; index += 1) { const start = Date.parse(readings[index - 1].observed_at); const end = Date.parse(readings[index].observed_at); if ((end - start) / 1000 > snapshot.policy.max_gap_seconds) gaps.push({ start, end, sensor: sensor.role === "reference" ? "A" : "B" }); } return gaps; }); }
+function formatUtc(value: number) { return new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" }).format(new Date(value)); }
+function TooltipContent({ active, payload }: { active?: boolean; payload?: Array<{ name?: string; dataKey?: string; value?: number | null; payload?: any }> }) {
+  if (!active || !payload?.length) return null;
+  const itemA = payload.find((item) => item.name === "Sensor A" || item.dataKey === "sensor_a");
+  const itemB = payload.find((item) => item.name === "Sensor B" || item.dataKey === "sensor_b");
+  const firstPayload = payload[0].payload ?? {};
+  const timestamp = firstPayload.timestamp ?? Date.now();
+  const valA = itemA && itemA.value !== undefined ? itemA.value : firstPayload.sensor_a ?? (firstPayload.temperature !== undefined ? firstPayload.temperature : null);
+  const valB = itemB && itemB.value !== undefined ? itemB.value : firstPayload.sensor_b ?? null;
+  const eventIdA = itemA?.payload?.event_id ?? firstPayload.sensor_a_event_id ?? (firstPayload.event_id ?? null);
+  const eventIdB = itemB?.payload?.event_id ?? firstPayload.sensor_b_event_id ?? null;
+
+  return (
+    <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs shadow-lg">
+      <p className="font-semibold text-slate-950">{formatUtc(timestamp)} UTC</p>
+      <p className="mt-1 text-cyan-700 font-medium">Sensor A (Ref): {valA == null ? "—" : `${valA}°C`}</p>
+      <p className="text-slate-700 font-medium">Sensor B (Comp): {valB == null ? "—" : `${valB}°C`}</p>
+      {eventIdA && <p className="mt-1 text-[10px] text-slate-400">Record A: {eventIdA}</p>}
+      {eventIdB && <p className="text-[10px] text-slate-400">Record B: {eventIdB}</p>}
+    </div>
+  );
+}
+
+export function TelemetryChart({ snapshot, highlightedRecordIds = new Set(), onRecordSelect }: TelemetryChartProps) {
+  const series = useMemo(() => buildSeries(snapshot), [snapshot]);
+  const gaps = useMemo(() => getSensorGaps(snapshot), [snapshot]);
+  const sensorASeries = useMemo(() => buildSensorSeries(snapshot, "reference", gaps), [snapshot, gaps]);
+  const sensorBSeries = useMemo(() => buildSensorSeries(snapshot, "comparison", gaps), [snapshot, gaps]);
+  const minTime = series[0]?.timestamp ?? Date.parse(snapshot.cutoff_at);
+  const maxTime = series.at(-1)?.timestamp ?? minTime;
+  const eventMarkers = snapshot.events.filter((event) => event.event_type !== "vehicle_state");
+
+  return (
+    <div className="rounded-[10px] border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h2 className="text-lg font-semibold text-slate-950">Temperature telemetry</h2>
+          <p className="mt-1 text-[11px] text-slate-500">Configured band · {snapshot.policy.min_c}°C–{snapshot.policy.max_c}°C · both sensors · UTC</p>
+        </div>
+        <div className="flex gap-4 text-[11px] font-semibold text-slate-600" aria-label="Chart legend">
+          <span className="text-cyan-700">●— Sensor A (Ref)</span>
+          <span className="text-slate-700">●┄ Sensor B (Comp)</span>
+          <span>▰ Policy band</span>
+        </div>
+      </div>
+      <div className="mt-4 h-[300px] rounded-md border border-slate-200 bg-slate-50 p-2">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={series} margin={{ top: 20, right: 20, left: 4, bottom: 8 }}>
+            <CartesianGrid stroke="#E2E8F0" vertical={false} />
+            <XAxis dataKey="timestamp" type="number" domain={[minTime, maxTime]} tickFormatter={formatUtc} tick={{ fontSize: 10, fill: "#94A3B8" }} axisLine={{ stroke: "#CBD5E1" }} tickLine={false} />
+            <YAxis domain={[0, "auto"]} tickFormatter={(value) => `${value}°C`} tick={{ fontSize: 10, fill: "#94A3B8" }} axisLine={false} tickLine={false} width={42} />
+            <ReferenceArea y1={snapshot.policy.min_c} y2={snapshot.policy.max_c} fill="#EAF5F7" fillOpacity={1} />
+            {gaps.map((gap) => (
+              <ReferenceArea key={`${gap.sensor}-${gap.start}-${gap.end}`} x1={gap.start} x2={gap.end} fill="#CBD5E1" fillOpacity={0.45} label={{ value: `Sensor ${gap.sensor} gap`, position: "insideTop" }} />
+            ))}
+            {eventMarkers.map((event) => {
+              const isEventActive = highlightedRecordIds.has(event.event_id);
+              return (
+                <ReferenceLine
+                  key={event.event_id}
+                  x={Date.parse(event.observed_at)}
+                  stroke={isEventActive ? "#B91C1C" : "#B45309"}
+                  strokeWidth={isEventActive ? 2 : 1}
+                  strokeDasharray="4 4"
+                  label={{ value: event.value, position: "insideTop", fontSize: 10, fill: isEventActive ? "#B91C1C" : "#B45309" }}
+                />
+              );
+            })}
+            <Tooltip content={<TooltipContent />} />
+            <Line
+              data={sensorASeries}
+              type="monotone"
+              dataKey="temperature"
+              connectNulls={false}
+              stroke="#0891B2"
+              strokeWidth={2.5}
+              dot={({ cx, cy, payload }) => (
+                <circle cx={cx} cy={cy} r={payload.event_id && highlightedRecordIds.has(payload.event_id) ? 6 : 3} fill={payload.event_id && highlightedRecordIds.has(payload.event_id) ? "#B91C1C" : "#0891B2"} />
+              )}
+              name="Sensor A"
+            />
+            <Line
+              data={sensorBSeries}
+              type="monotone"
+              dataKey="temperature"
+              connectNulls={false}
+              stroke="#475569"
+              strokeWidth={2}
+              strokeDasharray="4 4"
+              dot={({ cx, cy, payload }) => (
+                <circle cx={cx} cy={cy} r={payload.event_id && highlightedRecordIds.has(payload.event_id) ? 6 : 3} fill={payload.event_id && highlightedRecordIds.has(payload.event_id) ? "#B91C1C" : "#475569"} />
+              )}
+              name="Sensor B"
+            />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-4 text-[11px]">
+        <span className="font-semibold text-slate-600">Policy band is sourced from the snapshot</span>
+        {gaps.length > 0 && <span className="text-slate-500">{gaps.length} per-sensor telemetry gap{gaps.length === 1 ? "" : "s"}</span>}
+        {highlightedRecordIds.size > 0 && <span className="text-amber-700">Evidence selection highlighted on chart</span>}
+      </div>
+      {eventMarkers.length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-2" aria-label="Telemetry events">
+          {eventMarkers.map((event) => {
+            const active = highlightedRecordIds.has(event.event_id);
+            return (
+              <button
+                key={event.event_id}
+                type="button"
+                aria-pressed={active}
+                onClick={() => onRecordSelect?.(active ? [] : [event.event_id])}
+                className={`rounded-md border px-2.5 py-1.5 text-[10px] font-semibold transition ${active ? "border-amber-400 bg-amber-50 text-amber-800" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+              >
+                {event.event_type.replace("_", " ")} · {formatUtc(Date.parse(event.observed_at))}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
