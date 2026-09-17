@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { ApiClient } from "../api/client";
 import { createApiEndpoints } from "../api/endpoints";
 import type { CreateReviewRequest, Review } from "../types/contracts";
@@ -9,6 +9,7 @@ export function useOperatorActions(runId: string | null) {
   const [reviewSubmitting, setReviewSubmitting] = useState(false);
   const [review, setReview] = useState<Review | null>(null);
   const [error, setError] = useState<Error | null>(null);
+  const runRequestRef = useRef<{ scenarioId: string; seed: number; idempotencyKey: string } | null>(null);
 
   const getApi = useCallback(() => {
     if (!auth.authenticated) throw new Error("Operator session is required");
@@ -24,9 +25,19 @@ export function useOperatorActions(runId: string | null) {
       const scenarios = await api.listScenarios();
       const scenario = scenarios[0];
       if (!scenario) throw new Error("No investigation scenarios are available");
-      const seed = crypto.getRandomValues(new Uint32Array(1))[0];
-      const idempotencyKey = crypto.randomUUID();
-      const result = await api.createRun({ scenario_id: scenario.scenario_id, seed }, idempotencyKey);
+
+      const request = runRequestRef.current ?? (() => {
+        const next = {
+          scenarioId: scenario.scenario_id,
+          seed: crypto.getRandomValues(new Uint32Array(1))[0],
+          idempotencyKey: crypto.randomUUID(),
+        };
+        runRequestRef.current = next;
+        return next;
+      })();
+
+      const result = await api.createRun({ scenario_id: request.scenarioId, seed: request.seed }, request.idempotencyKey);
+      runRequestRef.current = null;
       window.location.assign(`${window.location.pathname}?run_id=${encodeURIComponent(result.run_id)}`);
     } catch (cause) {
       const nextError = cause instanceof Error ? cause : new Error("Unable to start investigation");
