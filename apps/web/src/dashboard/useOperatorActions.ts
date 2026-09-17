@@ -3,20 +3,10 @@ import { ApiClient } from "../api/client";
 import { createApiEndpoints } from "../api/endpoints";
 import type { CreateReviewRequest, Review } from "../types/contracts";
 import { useAuth } from "../auth/AuthProvider";
+import { createRunAttempt, type RunCreationAttempt } from "./runAttempt";
 
-export interface RunCreationAttempt {
-  scenarioId: string;
-  seed: number;
-  idempotencyKey: string;
-}
-
-export function createRunAttempt(existing: RunCreationAttempt | null, scenarioId: string): RunCreationAttempt {
-  return existing ?? {
-    scenarioId,
-    seed: crypto.getRandomValues(new Uint32Array(1))[0],
-    idempotencyKey: crypto.randomUUID(),
-  };
-}
+export { createRunAttempt } from "./runAttempt";
+export type { RunCreationAttempt } from "./runAttempt";
 
 export function useOperatorActions(runId: string | null) {
   const auth = useAuth();
