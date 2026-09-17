@@ -4,37 +4,37 @@ Source of truth: docs/CONTRACTS.md
 All string values use snake_case matching the canonical JSON contracts.
 """
 
-from enum import Enum
+from enum import StrEnum
 
 # ── Snapshot Enums ──────────────────────────────────────────────────────────
 
 
-class EventType(str, Enum):
+class EventType(StrEnum):
     door_state = "door_state"
     refrigeration_state = "refrigeration_state"
     vehicle_state = "vehicle_state"
 
 
-class DoorState(str, Enum):
+class DoorState(StrEnum):
     open = "open"
     closed = "closed"
     unknown = "unknown"
 
 
-class RefrigerationState(str, Enum):
+class RefrigerationState(StrEnum):
     running = "running"
     stopped = "stopped"
     fault = "fault"
     unknown = "unknown"
 
 
-class VehicleState(str, Enum):
+class VehicleState(StrEnum):
     moving = "moving"
     stopped = "stopped"
     unknown = "unknown"
 
 
-class SensorRole(str, Enum):
+class SensorRole(StrEnum):
     reference = "reference"
     comparison = "comparison"
 
@@ -42,7 +42,7 @@ class SensorRole(str, Enum):
 # ── State Machine & Run Enums ───────────────────────────────────────────────
 
 
-class RunStatus(str, Enum):
+class RunStatus(StrEnum):
     pending_enqueue = "pending_enqueue"
     queued = "queued"
     running = "running"
@@ -51,7 +51,7 @@ class RunStatus(str, Enum):
     failed = "failed"
 
 
-class PublicStage(str, Enum):
+class PublicStage(StrEnum):
     preparing = "preparing"
     detecting = "detecting"
     collecting_evidence = "collecting_evidence"
@@ -61,7 +61,7 @@ class PublicStage(str, Enum):
     failed = "failed"
 
 
-class StageEventStatus(str, Enum):
+class StageEventStatus(StrEnum):
     started = "started"
     completed = "completed"
     failed = "failed"
@@ -70,32 +70,32 @@ class StageEventStatus(str, Enum):
 # ── Report & Evidence Enums ─────────────────────────────────────────────────
 
 
-class Outcome(str, Enum):
+class Outcome(StrEnum):
     hypothesis_supported = "hypothesis_supported"
     unresolved = "unresolved"
     no_excursion = "no_excursion"
 
 
-class HypothesisType(str, Enum):
+class HypothesisType(StrEnum):
     door_exposure = "door_exposure"
     refrigeration_problem = "refrigeration_problem"
     sensor_disagreement = "sensor_disagreement"
 
 
-class Assessment(str, Enum):
+class Assessment(StrEnum):
     supported = "supported"
     contradicted = "contradicted"
     insufficient = "insufficient"
 
 
-class EvidenceKind(str, Enum):
+class EvidenceKind(StrEnum):
     reading = "reading"
     event = "event"
     derived_metric = "derived_metric"
     policy = "policy"
 
 
-class NextCheckCode(str, Enum):
+class NextCheckCode(StrEnum):
     inspect_door = "inspect_door"
     check_refrigeration = "check_refrigeration"
     verify_sensor = "verify_sensor"
@@ -103,22 +103,22 @@ class NextCheckCode(str, Enum):
     quality_review = "quality_review"
 
 
-class ReviewDecision(str, Enum):
+class ReviewDecision(StrEnum):
     acknowledged = "acknowledged"
     request_more_evidence = "request_more_evidence"
 
 
-class GenerationMode(str, Enum):
+class GenerationMode(StrEnum):
     bedrock = "bedrock"
     deterministic_only = "deterministic_only"
 
 
-class VerificationStatus(str, Enum):
+class VerificationStatus(StrEnum):
     passed = "passed"
     blocked = "blocked"
 
 
-class CoverageStatus(str, Enum):
+class CoverageStatus(StrEnum):
     full = "full"
     partial = "partial"
     unknown = "unknown"
