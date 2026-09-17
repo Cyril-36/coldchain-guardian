@@ -5,6 +5,7 @@ interface AuthContextValue {
   loading: boolean;
   authenticated: boolean;
   accessToken: string | null;
+  error: Error | null;
   signIn: () => Promise<void>;
   signOut: () => void;
   getAccessToken: () => Promise<string | null>;
@@ -18,6 +19,7 @@ function getAuthorizationCode() {
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [accessToken, setAccessToken] = useState<string | null>(() => getStoredAccessToken());
+  const [error, setError] = useState<Error | null>(null);
   const [loading, setLoading] = useState(Boolean(getAuthorizationCode()));
 
   useEffect(() => {
@@ -27,10 +29,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     void completeSignIn(code)
       .then((token) => {
-        if (!cancelled) setAccessToken(token);
+        if (!cancelled) {
+          setAccessToken(token);
+          setError(null);
+        }
       })
-      .catch(() => {
-        if (!cancelled) setAccessToken(null);
+      .catch((reason: unknown) => {
+        if (!cancelled) {
+          setAccessToken(null);
+          setError(reason instanceof Error ? reason : new Error("Sign-in failed"));
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -40,11 +48,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signIn = useCallback(async () => {
+    setError(null);
     await beginSignIn();
   }, []);
 
   const signOut = useCallback(() => {
     setAccessToken(null);
+    setError(null);
     cognitoSignOut();
   }, []);
 
@@ -58,10 +68,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     loading,
     authenticated: Boolean(accessToken),
     accessToken,
+    error,
     signIn,
     signOut,
     getAccessToken,
-  }), [accessToken, getAccessToken, loading, signIn, signOut]);
+  }), [accessToken, error, getAccessToken, loading, signIn, signOut]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
