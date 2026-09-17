@@ -3,6 +3,7 @@ import { ApiClient } from "../api/client";
 import { ApiClientError } from "../api/errors";
 import { createApiEndpoints } from "../api/endpoints";
 import type { Report, Run, Snapshot } from "../types/contracts";
+import { useAuth } from "../auth/AuthProvider";
 import { demoReport, demoRun, demoSnapshot } from "./mockData";
 
 interface RunData {
@@ -10,6 +11,7 @@ interface RunData {
   snapshot: Snapshot;
   report: Report;
   source: "api" | "fixture";
+  protectedRun: boolean;
   snapshotReady: boolean;
   reportReady: boolean;
   loading: boolean;
@@ -34,6 +36,7 @@ function shouldRetry(error: unknown) {
 }
 
 export function useRunData(): RunData {
+  const auth = useAuth();
   const [retryNonce, setRetryNonce] = useState(0);
   const retry = () => setRetryNonce((value) => value + 1);
   const [data, setData] = useState<RunData>({
@@ -41,6 +44,7 @@ export function useRunData(): RunData {
     snapshot: demoSnapshot,
     report: demoReport,
     source: "fixture",
+    protectedRun: false,
     snapshotReady: true,
     reportReady: true,
     loading: false,
@@ -51,12 +55,36 @@ export function useRunData(): RunData {
   useEffect(() => {
     const baseUrl = import.meta.env.VITE_API_BASE_URL;
     const runId = getRunIdFromUrl();
-    if (!baseUrl || !runId) return;
+    const protectedRun = Boolean(baseUrl && runId);
+
+    if (!protectedRun) {
+      setData((current) => ({ ...current, protectedRun: false, source: "fixture", loading: false, error: null, retry }));
+      return;
+    }
+
+    if (auth.loading) {
+      setData((current) => ({ ...current, protectedRun: true, source: "api", loading: true, error: null, retry }));
+      return;
+    }
+
+    if (!auth.authenticated) {
+      setData((current) => ({
+        ...current,
+        protectedRun: true,
+        source: "api",
+        loading: false,
+        snapshotReady: false,
+        reportReady: false,
+        error: null,
+        retry,
+      }));
+      return;
+    }
 
     let cancelled = false;
     let pollTimer: number | undefined;
     const startedAt = Date.now();
-    const client = new ApiClient({ baseUrl });
+    const client = new ApiClient({ baseUrl, tokenProvider: auth.getAccessToken });
     const api = createApiEndpoints(client);
 
     const clearPollTimer = () => {
@@ -86,6 +114,7 @@ export function useRunData(): RunData {
         snapshot: snapshotReady ? snapshotResult.value : current.snapshot,
         report: reportReady ? reportResult.value : current.report,
         source: "api",
+        protectedRun: true,
         snapshotReady: snapshotReady || current.snapshotReady,
         reportReady: reportReady || current.reportReady,
         loading: false,
@@ -101,7 +130,7 @@ export function useRunData(): RunData {
         const run = await api.getRun(runId);
         if (cancelled) return;
 
-        setData((current) => ({ ...current, run, source: "api", loading: false, error: null, retry }));
+        setData((current) => ({ ...current, run, source: "api", protectedRun: true, loading: false, error: null, retry }));
 
         if (isTerminal(run.status)) {
           clearPollTimer();
@@ -117,6 +146,7 @@ export function useRunData(): RunData {
 
         setData((current) => ({
           ...current,
+          protectedRun: true,
           loading: false,
           error: error instanceof Error ? error : new Error("Unable to refresh investigation data"),
           retry,
@@ -138,13 +168,13 @@ export function useRunData(): RunData {
     };
 
     const initialise = async () => {
-      setData((current) => ({ ...current, source: "api", snapshotReady: false, reportReady: false, loading: true, error: null, retry }));
+      setData((current) => ({ ...current, protectedRun: true, source: "api", snapshotReady: false, reportReady: false, loading: true, error: null, retry }));
 
       try {
         const run = await api.getRun(runId);
         if (cancelled) return;
 
-        setData((current) => ({ ...current, run, source: "api", loading: true, error: null, retry }));
+        setData((current) => ({ ...current, run, source: "api", protectedRun: true, loading: true, error: null, retry }));
         await hydrateArtifacts(run);
         if (cancelled) return;
 
@@ -155,6 +185,7 @@ export function useRunData(): RunData {
           setData((current) => ({
             ...current,
             source: "api",
+            protectedRun: true,
             snapshotReady: false,
             reportReady: false,
             loading: false,
@@ -173,7 +204,7 @@ export function useRunData(): RunData {
       clearPollTimer();
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [retryNonce]);
+  }, [auth.authenticated, auth.getAccessToken, auth.loading, retryNonce]);
 
   return data;
 }
