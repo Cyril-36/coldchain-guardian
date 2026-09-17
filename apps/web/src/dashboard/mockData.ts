@@ -1,118 +1,77 @@
 import type { Report, Run, Snapshot } from "../types/contracts";
 
+const REFERENCE_SENSOR = "00000000-0000-0000-0000-000000005001";
+const COMPARISON_SENSOR = "00000000-0000-0000-0000-000000005002";
+const DOOR_EVENT = "00000000-0000-0000-0000-000000007001";
+const GAP_EVENT = "00000000-0000-0000-0000-000000007002";
+const DOOR_EVIDENCE = "00000000-0000-0000-0000-000000008001";
+const PEAK_EVIDENCE = "00000000-0000-0000-0000-000000008002";
+const GAP_EVIDENCE = "00000000-0000-0000-0000-000000008003";
+const REFERENCE_READING = (minute: number) => `00000000-0000-0000-0000-${String(6000 + minute).padStart(12, "0")}`;
+const COMPARISON_READING = (minute: number) => `00000000-0000-0000-0000-${String(7000 + minute).padStart(12, "0")}`;
+
 export const demoRun: Run = {
-  run_id: "00000000-0000-0000-0000-000000001042",
-  status: "needs_review",
-  stage: "ready",
-  created_at: "2026-09-17T12:00:00Z",
-  completed_at: "2026-09-17T12:04:30Z",
-  report_id: "00000000-0000-0000-0000-000000002042",
-  review: null,
-  generation_mode: "deterministic_only",
-  shipment_id: "00000000-0000-0000-0000-000000003048",
-  snapshot_id: "00000000-0000-0000-0000-000000004048",
-  stage_events: [],
-  report_summary: {
-    outcome: "hypothesis_supported",
-    primary_hypothesis: "door_exposure",
-    review_required: true,
-  },
-  error: null,
+  run_id: "00000000-0000-0000-0000-000000001042", status: "needs_review", stage: "ready",
+  created_at: "2026-09-17T12:00:00Z", completed_at: "2026-09-17T12:04:30Z", report_id: "00000000-0000-0000-0000-000000002042",
+  review: null, generation_mode: "deterministic_only", shipment_id: "00000000-0000-0000-0000-000000003048", snapshot_id: "00000000-0000-0000-0000-000000004048",
+  stage_events: [], report_summary: { outcome: "hypothesis_supported", primary_hypothesis: "door_exposure", review_required: true }, error: null,
 };
 
+const start = Date.parse("2026-09-17T12:00:00Z");
+const readings = Array.from({ length: 46 }, (_, minute) => {
+  if (minute >= 35 && minute <= 39) return [];
+  const timestamp = new Date(start + minute * 60_000).toISOString();
+  const normal = 5.2 + Math.sin(minute / 4) * 0.9;
+  const excursion = minute >= 12 && minute <= 30 ? 3.0 + Math.sin((minute - 12) / 3) * 1.2 : 0;
+  return [
+    { event_id: REFERENCE_READING(minute), sensor_id: REFERENCE_SENSOR, observed_at: timestamp, temperature_c: Number((normal + excursion).toFixed(1)) },
+    { event_id: COMPARISON_READING(minute), sensor_id: COMPARISON_SENSOR, observed_at: timestamp, temperature_c: Number((5.0 + Math.sin(minute / 5) * 0.7).toFixed(1)) },
+  ];
+}).flat();
+
+// Force deterministic fixture extrema used by the report while retaining realistic variation.
+const peak = readings.find((reading) => reading.event_id === REFERENCE_READING(30));
+if (peak) peak.temperature_c = 9.4;
+const low = readings.find((reading) => reading.event_id === REFERENCE_READING(4));
+if (low) low.temperature_c = 4.3;
+
 export const demoSnapshot: Snapshot = {
-  snapshot_id: demoRun.snapshot_id,
-  shipment_id: demoRun.shipment_id,
-  schema_version: "1.0",
-  source: "simulated",
-  cutoff_at: "2026-09-17T14:32:00Z",
-  policy: {
-    policy_id: "CC-2",
-    policy_version: "2.4",
-    min_c: 2,
-    max_c: 8,
-    expected_interval_seconds: 60,
-    max_gap_seconds: 300,
-  },
+  snapshot_id: demoRun.snapshot_id, shipment_id: demoRun.shipment_id, schema_version: "1.0", source: "simulated", cutoff_at: "2026-09-17T12:45:00Z",
+  policy: { policy_id: "CC-2", policy_version: "2.4", min_c: 2, max_c: 8, expected_interval_seconds: 60, max_gap_seconds: 300 },
   sensors: [
-    { sensor_id: "00000000-0000-0000-0000-000000005001", placement: "Cargo A", role: "reference" },
-    { sensor_id: "00000000-0000-0000-0000-000000005002", placement: "Cargo B", role: "comparison" },
+    { sensor_id: REFERENCE_SENSOR, placement: "Cargo A", role: "reference" },
+    { sensor_id: COMPARISON_SENSOR, placement: "Cargo B", role: "comparison" },
   ],
-  readings: Array.from({ length: 20 }, (_, index) => {
-    const base = 5.4 + Math.sin(index / 2.7) * 1.1;
-    const excursion = index >= 12 && index <= 16 ? (index - 11) * 1.05 : 0;
-    return {
-      event_id: `00000000-0000-0000-0000-0000000060${String(index).padStart(2, "0")}`,
-      sensor_id: index % 2 === 0 ? "00000000-0000-0000-0000-000000005001" : "00000000-0000-0000-0000-000000005002",
-      observed_at: new Date(Date.parse("2026-09-17T12:00:00Z") + index * 6 * 60_000).toISOString(),
-      temperature_c: Number((base + excursion).toFixed(1)),
-    };
-  }),
+  readings,
   events: [
-    {
-      event_id: "00000000-0000-0000-0000-000000007001",
-      observed_at: "2026-09-17T12:18:00Z",
-      event_type: "door_state",
-      value: "opened · 11 min",
-      source: "simulated",
-    },
-    {
-      event_id: "00000000-0000-0000-0000-000000007002",
-      observed_at: "2026-09-17T13:02:00Z",
-      event_type: "vehicle_state",
-      value: "telemetry gap · 4 min",
-      source: "simulated",
-    },
+    { event_id: DOOR_EVENT, observed_at: "2026-09-17T12:12:00Z", event_type: "door_state", value: "open", source: "simulated" },
+    { event_id: GAP_EVENT, observed_at: "2026-09-17T12:40:00Z", event_type: "vehicle_state", value: "telemetry gap · 6 min", source: "simulated" },
   ],
 };
 
 export const demoReport: Report = {
-  report_id: demoRun.report_id!,
-  run_id: demoRun.run_id,
-  snapshot_id: demoRun.snapshot_id,
-  snapshot_sha256: "synthetic-demo-digest",
-  schema_version: "1.0",
-  detector_version: "demo-detector",
-  prompt_version: "demo-prompt",
-  model_id: null,
-  created_at: "2026-09-17T12:04:30Z",
-  cutoff_at: demoSnapshot.cutoff_at,
-  measurements: [
-    {
-      sensor_id: demoSnapshot.sensors[0].sensor_id,
-      first_observed_out_at: "2026-09-17T13:12:00Z",
-      last_observed_out_at: "2026-09-17T13:30:00Z",
-      estimated_out_of_range_seconds: 1080,
-      unknown_duration_seconds: 240,
-      sample_count: 10,
-      observed_min_c: 4.3,
-      observed_max_c: 9.4,
-      censored_start: false,
-      censored_end: false,
-      coverage_status: "partial",
-      evidence_ids: [],
-    },
-  ],
-  outcome: "hypothesis_supported",
-  primary_hypothesis: "door_exposure",
-  hypotheses: [
-    {
-      hypothesis: "door_exposure",
-      assessment: "supported",
-      supporting_evidence_ids: [],
-      conflicting_evidence_ids: [],
-      missing_evidence: [],
-      explanation: "Door activity aligns with the observed excursion onset.",
-    },
-  ],
+  report_id: demoRun.report_id!, run_id: demoRun.run_id, snapshot_id: demoRun.snapshot_id, snapshot_sha256: "synthetic-demo-digest", schema_version: "1.0",
+  detector_version: "demo-detector", prompt_version: "demo-prompt", model_id: null, created_at: "2026-09-17T12:04:30Z", cutoff_at: demoSnapshot.cutoff_at,
+  measurements: [{
+    sensor_id: REFERENCE_SENSOR, first_observed_out_at: "2026-09-17T12:12:00Z", last_observed_out_at: "2026-09-17T12:30:00Z",
+    estimated_out_of_range_seconds: 1080, unknown_duration_seconds: 60, sample_count: 41, observed_min_c: 4.3, observed_max_c: 9.4,
+    censored_start: false, censored_end: false, coverage_status: "partial", evidence_ids: [PEAK_EVIDENCE, GAP_EVIDENCE],
+  }],
+  outcome: "hypothesis_supported", primary_hypothesis: "door_exposure",
+  hypotheses: [{
+    hypothesis: "door_exposure", assessment: "supported", supporting_evidence_ids: [DOOR_EVIDENCE, PEAK_EVIDENCE], conflicting_evidence_ids: [],
+    missing_evidence: ["Refrigeration telemetry for the excursion interval."], explanation: "The door-open event starts at the same observed minute as the reference-sensor excursion.",
+  }],
   next_checks: [
-    { code: "inspect_door", reason: "Confirm door event logs.", related_evidence_ids: [] },
-    { code: "check_refrigeration", reason: "Check refrigeration telemetry for the same interval.", related_evidence_ids: [] },
-    { code: "verify_sensor", reason: "Compare sensor agreement.", related_evidence_ids: [] },
+    { code: "inspect_door", reason: "Confirm the recorded door-open event against door logs.", related_evidence_ids: [DOOR_EVIDENCE] },
+    { code: "check_refrigeration", reason: "Check refrigeration telemetry for the same interval.", related_evidence_ids: [DOOR_EVIDENCE] },
+    { code: "verify_sensor", reason: "Compare the reference sensor with the comparison sensor.", related_evidence_ids: [PEAK_EVIDENCE] },
   ],
-  limitations: ["Telemetry has a 4-minute gap, limiting duration estimation."],
-  verification: { status: "passed", errors: [], warnings: [] },
-  generation_mode: "deterministic_only",
-  review_required: true,
-  evidence: [],
+  limitations: ["A six-minute telemetry gap occurs after the excursion and adds 60 seconds of unknown coverage."],
+  verification: { status: "passed", errors: [], warnings: [] }, generation_mode: "deterministic_only", review_required: true,
+  evidence: [
+    { evidence_id: DOOR_EVIDENCE, snapshot_id: demoSnapshot.snapshot_id, kind: "event", record_ids: [DOOR_EVENT], observed_at: "2026-09-17T12:12:00Z", summary: "Door opened at excursion onset." },
+    { evidence_id: PEAK_EVIDENCE, snapshot_id: demoSnapshot.snapshot_id, kind: "reading", record_ids: [REFERENCE_READING(30)], observed_at: "2026-09-17T12:30:00Z", summary: "Reference sensor reached 9.4°C." },
+    { evidence_id: GAP_EVIDENCE, snapshot_id: demoSnapshot.snapshot_id, kind: "event", record_ids: [GAP_EVENT], observed_at: "2026-09-17T12:40:00Z", summary: "Telemetry gap recorded after the excursion." },
+  ],
 };
