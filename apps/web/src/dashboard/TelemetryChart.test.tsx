@@ -3,8 +3,10 @@ import { demoSnapshot } from "./mockData";
 import { getSensorGaps } from "./TelemetryChart";
 
 describe("getSensorGaps", () => {
-  it("does not classify a normal cadence as a gap", () => {
-    expect(getSensorGaps(demoSnapshot)).toHaveLength(0);
+  it("does not classify readings as gaps when cadence is within policy", () => {
+    const snapshot = structuredClone(demoSnapshot);
+    snapshot.policy.max_gap_seconds = 15 * 60;
+    expect(getSensorGaps(snapshot)).toHaveLength(0);
   });
 
   it("tracks gaps independently for each sensor", () => {
