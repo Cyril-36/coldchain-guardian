@@ -190,6 +190,12 @@ export type SchemaVersion2 = "1.0";
 export type BuildSha = string;
 export type Note1 = string;
 export type ReportId5 = string;
+export type RunId6 = string;
+export type ScenarioId1 = string;
+export type Seed1 = number;
+export type BaseTimestamp = string;
+export type SnapshotId4 = string;
+export type ShipmentId2 = string;
 /**
  * This interface was referenced by `ColdChainContracts`'s JSON-Schema
  * via the `definition` "CoverageStatus".
@@ -488,4 +494,21 @@ export interface ReviewRequest {
   decision: ReviewDecision;
   note?: Note1;
   report_id: ReportId5;
+}
+/**
+ * Canonical preparation record for resuming snapshot generation on retry.
+ *
+ * Guarantees that a retry following a crash between run reservation and snapshot
+ * attachment uses the exact same seed and generator base timestamp.
+ *
+ * This interface was referenced by `ColdChainContracts`'s JSON-Schema
+ * via the `definition` "PreparationRecord".
+ */
+export interface PreparationRecord {
+  run_id: RunId6;
+  scenario_id: ScenarioId1;
+  seed: Seed1;
+  base_timestamp: BaseTimestamp;
+  snapshot_id: SnapshotId4;
+  shipment_id: ShipmentId2;
 }

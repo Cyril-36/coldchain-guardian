@@ -25,6 +25,7 @@ from coldchain.contracts.schemas import (  # noqa: E402
     ErrorDetail,
     ErrorResponse,
     HealthResponse,
+    PreparationRecord,
     Report,
     Review,
     ReviewRequest,
@@ -132,9 +133,11 @@ def generate_typescript_types() -> None:
         DemoRunSummary,
         CreateRunRequest,
         RunResponse,
+        ErrorDetail,
         ErrorResponse,
         HealthResponse,
         ReviewRequest,
+        PreparationRecord,
     ]
 
     combined: dict[str, Any] = {

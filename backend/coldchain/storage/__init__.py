@@ -1,8 +1,9 @@
 """Storage interfaces and protocol definitions for ColdChain Guardian.
 
 Source of truth: docs/CONTRACTS.md §Storage interface
-This package defines the StorageProtocol that backend persistence adapters implement
-(e.g., Harshith's AWS DynamoDB + S3 adapters) without coupling to any in-memory adapter.
+This package defines the StorageProtocol, QueueSenderProtocol, and ArtifactSignerProtocol
+that backend persistence and queue adapters implement (e.g., Harshith's AWS DynamoDB,
+S3, and SQS adapters) without coupling to any in-memory adapter.
 """
 
 from __future__ import annotations
@@ -23,11 +24,63 @@ from coldchain.contracts.schemas import (
 )
 
 from .exceptions import (
+    ActiveRunLimitExceededError,
     ConditionalCheckFailedError,
+    DailyLimitExceededError,
     IdempotencyConflictError,
+    LimitExceededError,
     NotFoundError,
+    QueueError,
+    ReportNotReadyError,
+    StateConflictError,
     StorageError,
+    TemporaryEnqueueError,
+    TemporaryStorageError,
 )
+
+
+@runtime_checkable
+class QueueSenderProtocol(Protocol):
+    """Abstract queue-sender boundary for publishing investigation jobs (e.g., AWS SQS).
+
+    Distinguishes message delivery from storage state transitions so network/queue
+    failures preserve retryable pending_enqueue status without regressing states.
+    """
+
+    def send_run(
+        self,
+        run_id: str,
+        snapshot_id: str,
+        schema_version: str = "1.0",
+    ) -> None:
+        """Publish an investigation job message to the worker queue.
+
+        Raises:
+            QueueError: on temporary or terminal dispatch failure.
+        """
+        ...
+
+    def enqueue_run(
+        self,
+        run_id: str,
+        snapshot_id: str,
+        schema_version: str = "1.0",
+    ) -> None:
+        """Alias for send_run."""
+        ...
+
+
+@runtime_checkable
+class ArtifactSignerProtocol(Protocol):
+    """Abstract boundary for signing short-lived download URLs for stored artifacts."""
+
+    def create_report_download_url(
+        self,
+        report_ref: ArtifactRef,
+        expires_in_seconds: int = 300,
+    ) -> str:
+        """Generate a short-lived signed download URL (default 5 minutes / 300 seconds)."""
+        ...
 
 
 @runtime_checkable
@@ -126,20 +179,38 @@ class StorageProtocol(Protocol):
         """List curated public demonstration run summaries."""
         ...
 
-    def enqueue_run(
+    def mark_queued(self, run_id: str) -> None:
+        """Conditionally transition status to queued if in pending_enqueue / preparing.
+
+        Must NOT regress if the run is already claimed, running, or terminal.
+        """
+        ...
+
+    def create_report_download_url(
         self,
-        run_id: str,
-        snapshot_id: str,
-        schema_version: str,
-    ) -> None:
-        """Enqueue run to SQS investigation queue and transition status to queued."""
+        report_ref: ArtifactRef,
+        expires_in_seconds: int = 300,
+    ) -> str:
+        """Generate a short-lived download URL (default 5 minutes / 300 seconds) for report JSON."""
         ...
 
 
 __all__ = [
-    "ConditionalCheckFailedError",
-    "IdempotencyConflictError",
-    "NotFoundError",
-    "StorageError",
+    # Protocols
+    "ArtifactSignerProtocol",
+    "QueueSenderProtocol",
     "StorageProtocol",
+    # Exceptions
+    "ActiveRunLimitExceededError",
+    "ConditionalCheckFailedError",
+    "DailyLimitExceededError",
+    "IdempotencyConflictError",
+    "LimitExceededError",
+    "NotFoundError",
+    "QueueError",
+    "ReportNotReadyError",
+    "StateConflictError",
+    "StorageError",
+    "TemporaryEnqueueError",
+    "TemporaryStorageError",
 ]

@@ -107,11 +107,12 @@ Same user + same Idempotency-Key + same body returns the same run. Same key with
 
 Polling: 2 seconds while visible/running; back off to 5 seconds after 30 seconds. Stop at terminal state. Browser timeout shows “still processing” and offers refresh; it does not mark the backend failed.
 
-## Storage interface
+## Storage and queue interfaces
 
 Leader publishes Protocol definitions (and later a memory implementation) before backend teammate begins AWS adapter integration:
 
 ```text
+# StorageProtocol (persistence)
 create_or_get_run(owner_sub, idempotency_key, request_hash, metadata) -> Run
 attach_snapshot(run_id, snapshot_ref) -> None
 put_snapshot(snapshot) -> ArtifactRef(key, sha256)
@@ -125,10 +126,29 @@ put_report(report) -> ArtifactRef(key, sha256)
 get_report(report_ref) -> Report
 save_review(run_id, actor_sub, report_id, decision, note) -> Review
 list_public_runs() -> list[RunSummary]
-enqueue_run(run_id, snapshot_id, schema_version) -> None
+mark_queued(run_id) -> None
+create_report_download_url(report_ref, expires_in_seconds=300) -> str
+
+# QueueSenderProtocol (message dispatch)
+send_run(run_id, snapshot_id, schema_version="1.0") -> None
+
+# ArtifactSignerProtocol (short-lived artifact URLs)
+create_report_download_url(report_ref, expires_in_seconds=300) -> str
 ```
 
-In the state machine flow, `attach_snapshot(run_id, snapshot_ref)` explicitly records the durable snapshot artifact reference on the pending run prior to queue dispatch. In `claim_run`, `now` is a timezone-aware UTC datetime and `lease_seconds` is integer duration. `Review` contains `review_id`, `run_id`, `actor_sub`, `report_id`, `decision`, `note` (max 1,000 chars), and `reviewed_at` (accepts alias `created_at`).
+In the state machine flow, `attach_snapshot(run_id, snapshot_ref)` explicitly records the durable snapshot artifact reference on the pending run prior to queue dispatch. To guarantee crash recovery between run reservation and snapshot attachment, `Run` persists `seed` and `base_timestamp` (and exports `PreparationRecord`) so `create_or_get_run` returns the same generator identity on retry.
+
+Queue delivery is separated from storage state transitions: `QueueSenderProtocol.send_run(...)` publishes the job message to SQS. On send failure, the run remains in `pending_enqueue` and raises retryable `TemporaryEnqueueError` (HTTP 503). On send success, `storage.mark_queued(run_id)` conditionally transitions status to `queued` only if still in `pending_enqueue`/`preparing`, and must never regress if the run is already claimed, running, or terminal.
+
+Report download signing is provided via `create_report_download_url(report_ref, expires_in_seconds=300)` on `StorageProtocol` and `ArtifactSignerProtocol` to generate a narrow, short-lived 5-minute pre-signed URL for the validated report artifact.
+
+Storage and API exception hierarchy maps directly to HTTP status codes:
+- 404: `NotFoundError` (missing run, snapshot, report, or artifact)
+- 409: `StateConflictError`, `IdempotencyConflictError`, `ConditionalCheckFailedError`, `ReportNotReadyError`
+- 429: `LimitExceededError`, `DailyLimitExceededError`, `ActiveRunLimitExceededError`
+- 503: `TemporaryStorageError`, `QueueError`, `TemporaryEnqueueError` (`retryable = True`)
+
+In `claim_run`, `now` is a timezone-aware UTC datetime and `lease_seconds` is integer duration. `Review` contains `review_id`, `run_id`, `actor_sub`, `report_id`, `decision`, `note` (max 1,000 chars), and `reviewed_at` (accepts alias `created_at`).
 
 Use one DynamoDB table: `RUN#uuid/META`, `RUN#uuid/REVIEW#uuid`, `IDEMP#user#hash/REQUEST`, `LIMIT#date/COUNT`, `ACTIVE#user/LEASE`, `PUBLIC/DEMO#run_id`. Define transactional writes for idempotency/caps and conditional writes for claims. No scans in request paths. Put telemetry in S3, not a giant DynamoDB item. S3 keys use opaque snapshot/report IDs; report objects are immutable.
 

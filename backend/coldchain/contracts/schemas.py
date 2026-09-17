@@ -520,6 +520,21 @@ class ReportSummary(StrictBase):
     review_required: bool
 
 
+class PreparationRecord(StrictBase):
+    """Canonical preparation record for resuming snapshot generation on retry.
+
+    Guarantees that a retry following a crash between run reservation and snapshot
+    attachment uses the exact same seed and generator base timestamp.
+    """
+
+    run_id: UuidStr
+    scenario_id: str
+    seed: int
+    base_timestamp: UtcDatetime
+    snapshot_id: UuidStr
+    shipment_id: UuidStr
+
+
 class Run(StrictBase):
     run_id: UuidStr
     status: RunStatus
@@ -543,6 +558,34 @@ class Run(StrictBase):
     scenario_id: str | None = Field(default=None, exclude=True)
     attempt_id: str | None = Field(default=None, exclude=True)
     lease_expires_at: UtcDatetime | None = Field(default=None, exclude=True)
+    seed: int | None = Field(default=None, exclude=True)
+    base_timestamp: UtcDatetime | None = Field(
+        default=None,
+        exclude=True,
+        validation_alias=AliasChoices(
+            "base_timestamp", "generator_base_time", "generator_base_timestamp"
+        ),
+    )
+
+    @property
+    def generator_base_timestamp(self) -> datetime | None:
+        return self.base_timestamp
+
+    @property
+    def generator_base_time(self) -> datetime | None:
+        return self.base_timestamp
+
+    def to_preparation_record(self) -> PreparationRecord | None:
+        if self.scenario_id and self.seed is not None and self.base_timestamp is not None:
+            return PreparationRecord(
+                run_id=self.run_id,
+                scenario_id=self.scenario_id,
+                seed=self.seed,
+                base_timestamp=self.base_timestamp,
+                snapshot_id=self.snapshot_id,
+                shipment_id=self.shipment_id,
+            )
+        return None
 
     @field_validator("stage_events")
     @classmethod

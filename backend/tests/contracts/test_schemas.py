@@ -31,6 +31,7 @@ from coldchain.contracts.schemas import (
     Hypothesis,
     NextCheck,
     Policy,
+    PreparationRecord,
     QueueMessage,
     Reading,
     Report,
@@ -833,5 +834,55 @@ def test_report_model_dump_omits_none_fields_in_evidence() -> None:
     assert "observed_at" not in ev_item
     assert "interval" not in ev_item
     assert "method_version" not in ev_item
+
+
+def test_preparation_record_validation() -> None:
+    """PreparationRecord validates scenario_id, seed, base_timestamp, snapshot/shipment UUIDs."""
+    prep = PreparationRecord(
+        run_id="00000000-0000-4000-8000-000000000001",
+        scenario_id="door_exposure",
+        seed=42,
+        base_timestamp=datetime(2026, 9, 17, 8, 0, tzinfo=UTC),
+        snapshot_id="00000000-0000-4000-8000-000000000002",
+        shipment_id="00000000-0000-4000-8000-000000000003",
+    )
+    assert prep.seed == 42
+    assert prep.scenario_id == "door_exposure"
+    assert prep.base_timestamp.isoformat() == "2026-09-17T08:00:00+00:00"
+
+
+def test_run_persists_seed_and_base_timestamp_excluded_from_wire() -> None:
+    """Run stores seed and base_timestamp for crash recovery, but excludes them from wire JSON."""
+    base_time = datetime(2026, 9, 17, 8, 0, tzinfo=UTC)
+    run = Run(
+        run_id="00000000-0000-4000-8000-000000000001",
+        status=RunStatus.queued,
+        stage=PublicStage.preparing,
+        created_at=base_time,
+        shipment_id="00000000-0000-4000-8000-000000000002",
+        snapshot_id="00000000-0000-4000-8000-000000000003",
+        scenario_id="door_exposure",
+        seed=101,
+        generator_base_time=base_time,
+    )
+    assert run.seed == 101
+    assert run.base_timestamp == base_time
+    assert run.generator_base_timestamp == base_time
+    assert run.generator_base_time == base_time
+
+    # Wire JSON dump must NOT include seed or base_timestamp
+    dumped = run.model_dump(mode="json")
+    assert "seed" not in dumped
+    assert "base_timestamp" not in dumped
+    assert "generator_base_time" not in dumped
+    assert "generator_base_timestamp" not in dumped
+
+    # Conversion to PreparationRecord
+    prep = run.to_preparation_record()
+    assert prep is not None
+    assert prep.seed == 101
+    assert prep.scenario_id == "door_exposure"
+    assert prep.base_timestamp == base_time
+
 
 
