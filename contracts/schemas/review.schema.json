@@ -1,0 +1,54 @@
+{
+  "$defs": {
+    "ReviewDecision": {
+      "enum": [
+        "acknowledged",
+        "request_more_evidence"
+      ],
+      "title": "ReviewDecision",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "review_id": {
+      "title": "Review Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "report_id": {
+      "title": "Report Id",
+      "type": "string"
+    },
+    "decision": {
+      "$ref": "#/$defs/ReviewDecision"
+    },
+    "note": {
+      "default": "",
+      "maxLength": 1000,
+      "title": "Note",
+      "type": "string"
+    },
+    "actor_sub": {
+      "title": "Actor Sub",
+      "type": "string"
+    },
+    "reviewed_at": {
+      "format": "date-time",
+      "title": "Reviewed At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "report_id",
+    "decision",
+    "actor_sub",
+    "reviewed_at"
+  ],
+  "title": "Review",
+  "type": "object"
+}

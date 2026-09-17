@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 # Ensure backend is in python path
 root = Path(__file__).resolve().parents[1]
@@ -38,6 +39,7 @@ def validate_examples() -> int:
 
     errors: list[str] = []
     validated = 0
+    instances: dict[str, Any] = {}
 
     for filename, model_cls in expected_files:
         path = examples_dir / filename
@@ -49,17 +51,38 @@ def validate_examples() -> int:
             content = path.read_text(encoding="utf-8")
             parsed = json.loads(content)
             instance = model_cls.model_validate(parsed)
+            # Ensure serialization round-trip succeeds
+            dumped = instance.model_dump(mode="json")
+            assert isinstance(dumped, dict)
+            instances[filename] = instance
             validated += 1
-
-            # Extra check for snapshot sha256 reference integrity in reports
-            if filename == "door-snapshot.json":
-                digest = snapshot_sha256(instance)
-                print(f"  [OK] {filename} (validated Snapshot, sha256: {digest[:16]}...)")
-            else:
-                print(f"  [OK] {filename} (validated {model_cls.__name__})")
-
+            print(f"  [OK] {filename} (validated {model_cls.__name__})")
         except Exception as exc:
             errors.append(f"Failed validating {filename} against {model_cls.__name__}: {exc}")
+
+    # Cross-reference integrity checks for door-snapshot references
+    door_snap = instances.get("door-snapshot.json")
+    if door_snap is not None and isinstance(door_snap, Snapshot):
+        expected_digest = snapshot_sha256(door_snap)
+        print(f"\n  Checking door-snapshot.json integrity (sha256: {expected_digest})...")
+
+        for r_file in ("supported-report.json", "unresolved-report.json"):
+            report = instances.get(r_file)
+            if report is not None and isinstance(report, Report):
+                if report.snapshot_id != door_snap.snapshot_id:
+                    errors.append(
+                        f"{r_file} snapshot_id ({report.snapshot_id}) does not match "
+                        f"door-snapshot.json snapshot_id ({door_snap.snapshot_id})"
+                    )
+                if report.snapshot_sha256 != expected_digest:
+                    errors.append(
+                        f"{r_file} snapshot_sha256 ({report.snapshot_sha256}) does not match "
+                        f"computed door-snapshot.json digest ({expected_digest})"
+                    )
+                if not report.evidence:
+                    errors.append(f"{r_file} must contain at least one evidence item")
+                else:
+                    print(f"  [OK] {r_file} digest matches door-snapshot and includes {len(report.evidence)} evidence items")
 
     if errors:
         print("\nValidation Errors:", file=sys.stderr)

@@ -119,6 +119,6 @@ class VerificationStatus(StrEnum):
 
 
 class CoverageStatus(StrEnum):
-    full = "full"
+    complete = "complete"
     partial = "partial"
-    unknown = "unknown"
+    insufficient = "insufficient"

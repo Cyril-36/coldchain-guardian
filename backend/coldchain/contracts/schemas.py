@@ -306,17 +306,28 @@ def snapshot_sha256(snapshot: Snapshot) -> str:
 # ── Evidence Models ─────────────────────────────────────────────────────────
 
 
+class EvidenceInterval(StrictBase):
+    start_at: UtcDatetime
+    end_at: UtcDatetime
+
+    @model_validator(mode="after")
+    def validate_interval_order(self) -> EvidenceInterval:
+        if self.start_at > self.end_at:
+            raise ValueError(
+                f"start_at cannot be after end_at: {self.start_at} > {self.end_at}"
+            )
+        return self
+
+
 class EvidenceRef(StrictBase):
     evidence_id: UuidStr
     snapshot_id: UuidStr
     kind: EvidenceKind
     record_ids: list[UuidStr] = Field(default_factory=list)
     observed_at: UtcDatetime | None = None
-    interval_start: UtcDatetime | None = None
-    interval_end: UtcDatetime | None = None
+    interval: EvidenceInterval | None = None
     summary: str
     method_version: str | None = None
-    input_record_ids: list[UuidStr] | None = None
 
 
 # ── Measurement Models ──────────────────────────────────────────────────────
@@ -324,8 +335,6 @@ class EvidenceRef(StrictBase):
 
 class SensorMeasurement(StrictBase):
     sensor_id: UuidStr
-    role: SensorRole
-    excursion_detected: bool
     first_observed_out_at: UtcDatetime | None = None
     last_observed_out_at: UtcDatetime | None = None
     estimated_out_of_range_seconds: FiniteFloat = 0.0
@@ -335,7 +344,7 @@ class SensorMeasurement(StrictBase):
     observed_max_c: FiniteFloat | None = None
     censored_start: bool = False
     censored_end: bool = False
-    coverage_status: CoverageStatus = CoverageStatus.full
+    coverage_status: CoverageStatus = CoverageStatus.complete
     evidence_ids: list[UuidStr] = Field(default_factory=list)
 
 
@@ -352,14 +361,22 @@ class Hypothesis(StrictBase):
 
 
 class NextCheck(StrictBase):
-    action_code: NextCheckCode = Field(
-        validation_alias=AliasChoices("action_code", "code")
+    code: NextCheckCode = Field(
+        validation_alias=AliasChoices("code", "action_code"),
     )
     reason: str
-    evidence_ids: list[UuidStr] = Field(
+    related_evidence_ids: list[UuidStr] = Field(
         default_factory=list,
-        validation_alias=AliasChoices("evidence_ids", "related_evidence_ids"),
+        validation_alias=AliasChoices("related_evidence_ids", "evidence_ids"),
     )
+
+    @property
+    def action_code(self) -> NextCheckCode:
+        return self.code
+
+    @property
+    def evidence_ids(self) -> list[str]:
+        return self.related_evidence_ids
 
 
 class Verification(StrictBase):
@@ -375,7 +392,7 @@ class Report(StrictBase):
     snapshot_sha256: Sha256Str
     schema_version: Literal["1.0"] = "1.0"
     detector_version: str
-    prompt_version: str | None = None
+    prompt_version: str = "1.0.0"
     model_id: str | None = None
     created_at: UtcDatetime
     cutoff_at: UtcDatetime
@@ -388,6 +405,50 @@ class Report(StrictBase):
     verification: Verification
     generation_mode: GenerationMode
     review_required: bool
+    evidence: list[EvidenceRef] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_evidence_provenance(self) -> Report:
+        valid_ids = {e.evidence_id for e in self.evidence}
+
+        for ev in self.evidence:
+            if ev.snapshot_id != self.snapshot_id:
+                raise ValueError(
+                    f"Evidence {ev.evidence_id} snapshot_id ({ev.snapshot_id}) does not "
+                    f"match report snapshot_id ({self.snapshot_id})"
+                )
+
+        for h in self.hypotheses:
+            for ev_id in h.supporting_evidence_ids:
+                if ev_id not in valid_ids:
+                    raise ValueError(
+                        f"Hypothesis '{h.hypothesis.value}' cites unknown supporting "
+                        f"evidence_id: '{ev_id}'"
+                    )
+            for ev_id in h.conflicting_evidence_ids:
+                if ev_id not in valid_ids:
+                    raise ValueError(
+                        f"Hypothesis '{h.hypothesis.value}' cites unknown conflicting "
+                        f"evidence_id: '{ev_id}'"
+                    )
+
+        for nc in self.next_checks:
+            for ev_id in nc.related_evidence_ids:
+                if ev_id not in valid_ids:
+                    raise ValueError(
+                        f"NextCheck '{nc.code.value}' cites unknown related "
+                        f"evidence_id: '{ev_id}'"
+                    )
+
+        for m in self.measurements:
+            for ev_id in m.evidence_ids:
+                if self.evidence and ev_id not in valid_ids:
+                    raise ValueError(
+                        f"Measurement for sensor '{m.sensor_id}' cites unknown "
+                        f"evidence_id: '{ev_id}'"
+                    )
+
+        return self
 
 
 # ── Storage & Run Models ────────────────────────────────────────────────────
@@ -411,30 +472,48 @@ class StageEvent(StrictBase):
 class Review(StrictBase):
     review_id: UuidStr = Field(default_factory=lambda: str(uuid.uuid4()))
     run_id: UuidStr
-    actor_sub: str
     report_id: UuidStr
     decision: ReviewDecision
     note: str = Field(default="", max_length=1000)
-    created_at: UtcDatetime
+    actor_sub: str
+    reviewed_at: UtcDatetime = Field(
+        validation_alias=AliasChoices("reviewed_at", "created_at"),
+    )
+
+    @property
+    def created_at(self) -> datetime:
+        return self.reviewed_at
+
+
+class ReportSummary(StrictBase):
+    outcome: Outcome
+    primary_hypothesis: HypothesisType | None = None
+    review_required: bool
 
 
 class Run(StrictBase):
     run_id: UuidStr
-    owner_sub: str
     status: RunStatus
     stage: PublicStage
-    stage_events: list[StageEvent] = Field(default_factory=list)
     created_at: UtcDatetime
-    updated_at: UtcDatetime
-    snapshot_ref: ArtifactRef | None = None
-    report_ref: ArtifactRef | None = None
-    scenario_id: str | None = None
-    error: str | None = None
+    completed_at: UtcDatetime | None = None
+    report_id: UuidStr | None = None
     review: Review | None = None
     generation_mode: GenerationMode | None = None
+    shipment_id: UuidStr
+    snapshot_id: UuidStr
+    stage_events: list[StageEvent] = Field(default_factory=list)
+    report_summary: ReportSummary | None = None
+    error: ErrorDetail | None = None
     is_public_demo: bool = False
-    attempt_id: str | None = None
-    lease_expires_at: UtcDatetime | None = None
+    label: str | None = None
+    # Storage persistence metadata (excluded from wire JSON)
+    snapshot_ref: ArtifactRef | None = Field(default=None, exclude=True)
+    report_ref: ArtifactRef | None = Field(default=None, exclude=True)
+    owner_sub: str | None = Field(default=None, exclude=True)
+    scenario_id: str | None = Field(default=None, exclude=True)
+    attempt_id: str | None = Field(default=None, exclude=True)
+    lease_expires_at: UtcDatetime | None = Field(default=None, exclude=True)
 
     @field_validator("stage_events")
     @classmethod
@@ -448,11 +527,13 @@ class RunSummary(StrictBase):
     run_id: UuidStr
     status: RunStatus
     stage: PublicStage
-    scenario_id: str | None = None
     created_at: UtcDatetime
-    updated_at: UtcDatetime
-    outcome: Outcome | None = None
+    completed_at: UtcDatetime | None = None
+    report_id: UuidStr | None = None
+    review: Review | None = None
+    generation_mode: GenerationMode | None = None
     is_public_demo: bool = False
+    label: str | None = None
 
 
 class ClaimResult(StrictBase):

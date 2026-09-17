@@ -49,8 +49,8 @@ def test_queued_run_example() -> None:
 
     assert run.status == RunStatus.queued
     assert run.stage == PublicStage.preparing
-    assert run.snapshot_ref is not None
-    assert run.report_ref is None
+    assert run.snapshot_id is not None
+    assert run.report_id is None
     assert run.is_public_demo is False
 
 
@@ -60,8 +60,8 @@ def test_running_run_example() -> None:
 
     assert run.status == RunStatus.running
     assert run.stage == PublicStage.collecting_evidence
-    assert run.snapshot_ref is not None
-    assert run.report_ref is None
+    assert run.snapshot_id is not None
+    assert run.report_id is None
     assert len(run.stage_events) == 3
     assert run.generation_mode == GenerationMode.bedrock
 
@@ -122,25 +122,29 @@ def test_failed_run_example() -> None:
     assert run.status == RunStatus.failed
     assert run.stage == PublicStage.failed
     assert run.error is not None
-    assert run.report_ref is None
+    assert run.report_id is None
 
 
 def test_example_cross_reference_integrity() -> None:
-    """Verify that report and run examples referencing door-snapshot.json have matching SHA-256."""
+    """Verify that report and run examples referencing door-snapshot.json
+    have matching IDs and SHA-256.
+    """
     snapshot_data = _load_json("door-snapshot.json")
     snapshot = Snapshot.model_validate(snapshot_data)
     expected_sha = snapshot_sha256(snapshot)
 
     queued_run = Run.model_validate(_load_json("queued-run.json"))
-    assert queued_run.snapshot_ref is not None
-    assert queued_run.snapshot_ref.sha256 == expected_sha
+    assert queued_run.snapshot_id == snapshot.snapshot_id
 
     running_run = Run.model_validate(_load_json("running-run.json"))
-    assert running_run.snapshot_ref is not None
-    assert running_run.snapshot_ref.sha256 == expected_sha
+    assert running_run.snapshot_id == snapshot.snapshot_id
 
     supported_report = Report.model_validate(_load_json("supported-report.json"))
+    assert supported_report.snapshot_id == snapshot.snapshot_id
     assert supported_report.snapshot_sha256 == expected_sha
+    assert len(supported_report.evidence) > 0
 
     unresolved_report = Report.model_validate(_load_json("unresolved-report.json"))
+    assert unresolved_report.snapshot_id == snapshot.snapshot_id
     assert unresolved_report.snapshot_sha256 == expected_sha
+    assert len(unresolved_report.evidence) > 0

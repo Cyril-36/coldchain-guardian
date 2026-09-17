@@ -1,21 +1,17 @@
 {
   "run_id": "8c0a2b91-4d1e-450a-9d21-f8a1e2b3c4d5",
-  "owner_sub": "operator-cyril-001",
   "status": "queued",
   "stage": "preparing",
-  "stage_events": [],
   "created_at": "2026-09-17T10:00:00Z",
-  "updated_at": "2026-09-17T10:00:01Z",
-  "snapshot_ref": {
-    "key": "snapshots/27b7281c-f4f5-5165-a244-10d1010db2bc.json",
-    "sha256": "1dbe7dc1667e3e5eccb954402eeee1a6b06237001bc82ff6953459d8b3b6c8ea"
-  },
-  "report_ref": null,
-  "scenario_id": "door_exposure",
-  "error": null,
+  "completed_at": null,
+  "report_id": null,
   "review": null,
   "generation_mode": null,
+  "shipment_id": "fc90f5ba-5a1e-5913-851b-77312233316f",
+  "snapshot_id": "27b7281c-f4f5-5165-a244-10d1010db2bc",
+  "stage_events": [],
+  "report_summary": null,
+  "error": null,
   "is_public_demo": false,
-  "attempt_id": null,
-  "lease_expires_at": null
+  "label": null
 }

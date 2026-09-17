@@ -10,25 +10,37 @@ from pydantic import ValidationError
 
 from coldchain.contracts.enums import (
     CoverageStatus,
+    EvidenceKind,
+    GenerationMode,
+    HypothesisType,
     NextCheckCode,
+    Outcome,
     PublicStage,
     ReviewDecision,
     RunStatus,
     StageEventStatus,
+    VerificationStatus,
 )
 from coldchain.contracts.schemas import (
     MAX_SNAPSHOT_EVENTS,
     MAX_SNAPSHOT_READINGS,
     ArtifactRef,
     ClaimResult,
+    EvidenceInterval,
+    EvidenceRef,
+    Hypothesis,
     NextCheck,
     Policy,
     QueueMessage,
     Reading,
+    Report,
+    ReportSummary,
     Review,
     Run,
+    SensorMeasurement,
     Snapshot,
     StageEvent,
+    Verification,
     snapshot_sha256,
 )
 
@@ -368,9 +380,43 @@ def test_next_check_accepts_code_and_related_evidence_ids_aliases() -> None:
 
 
 def test_coverage_status_enum_values() -> None:
-    assert CoverageStatus.full.value == "full"
+    assert CoverageStatus.complete.value == "complete"
     assert CoverageStatus.partial.value == "partial"
-    assert CoverageStatus.unknown.value == "unknown"
+    assert CoverageStatus.insufficient.value == "insufficient"
+
+
+def test_next_check_wire_serialization() -> None:
+    nc = NextCheck(
+        code=NextCheckCode.inspect_door,
+        reason="Check door latch",
+        related_evidence_ids=["00000000-0000-4000-8000-000000000001"],
+    )
+    dumped = nc.model_dump(mode="json")
+    assert dumped == {
+        "code": "inspect_door",
+        "reason": "Check door latch",
+        "related_evidence_ids": ["00000000-0000-4000-8000-000000000001"],
+    }
+
+
+def test_sensor_measurement_no_role_attribute() -> None:
+    # SensorMeasurement must NOT accept role (role belongs to Sensor in Snapshot)
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        SensorMeasurement.model_validate({
+            "sensor_id": "55555555-5555-4555-8555-555555555555",
+            "role": "reference",
+            "first_observed_out_at": None,
+            "last_observed_out_at": None,
+            "estimated_out_of_range_seconds": 0.0,
+            "unknown_duration_seconds": 0.0,
+            "sample_count": 10,
+            "observed_min_c": 4.0,
+            "observed_max_c": 5.0,
+            "censored_start": False,
+            "censored_end": False,
+            "coverage_status": "complete",
+            "evidence_ids": [],
+        })
 
 
 # ── Review & Run Model Tests ────────────────────────────────────────────────
@@ -383,7 +429,7 @@ def test_review_note_length_limit() -> None:
         report_id="22222222-2222-4222-8222-222222222222",
         decision=ReviewDecision.acknowledged,
         note="a" * 1000,
-        created_at="2026-09-17T12:00:00Z",
+        reviewed_at="2026-09-17T12:00:00Z",
     )
     assert len(review.note) == 1000
 
@@ -394,30 +440,105 @@ def test_review_note_length_limit() -> None:
             report_id="22222222-2222-4222-8222-222222222222",
             decision=ReviewDecision.acknowledged,
             note="a" * 1001,
-            created_at="2026-09-17T12:00:00Z",
+            reviewed_at="2026-09-17T12:00:00Z",
         )
 
 
+def test_review_reviewed_at_wire_format_and_created_at_alias() -> None:
+    r1 = Review.model_validate({
+        "run_id": "11111111-1111-4111-8111-111111111111",
+        "report_id": "22222222-2222-4222-8222-222222222222",
+        "decision": "acknowledged",
+        "note": "All good",
+        "actor_sub": "operator-001",
+        "created_at": "2026-09-17T12:00:00Z",
+    })
+    assert r1.created_at.isoformat().endswith("+00:00")
+    assert r1.reviewed_at == r1.created_at
+    dumped1 = r1.model_dump(mode="json")
+    assert "reviewed_at" in dumped1
+    assert dumped1["reviewed_at"] == "2026-09-17T12:00:00Z"
+
+    r2 = Review.model_validate({
+        "run_id": "11111111-1111-4111-8111-111111111111",
+        "report_id": "22222222-2222-4222-8222-222222222222",
+        "decision": "acknowledged",
+        "note": "All good",
+        "actor_sub": "operator-001",
+        "reviewed_at": "2026-09-17T12:00:00Z",
+    })
+    assert r2.reviewed_at == r2.created_at
+    dumped2 = r2.model_dump(mode="json")
+    assert dumped2["reviewed_at"] == "2026-09-17T12:00:00Z"
+
+
 def test_run_stage_events_bounded_at_40() -> None:
-    events = [
+    events_40 = [
         StageEvent(
             event_id=f"{i:08x}-0000-4000-8000-000000000000",
             stage=PublicStage.detecting,
             started_at="2026-09-17T10:00:00Z",
             status=StageEventStatus.completed,
         )
-        for i in range(41)
+        for i in range(40)
+    ]
+    run = Run(
+        run_id="11111111-1111-4111-8111-111111111111",
+        shipment_id="22222222-2222-4222-8222-222222222222",
+        snapshot_id="33333333-3333-4333-8333-333333333333",
+        status=RunStatus.running,
+        stage=PublicStage.detecting,
+        stage_events=events_40,
+        created_at="2026-09-17T10:00:00Z",
+    )
+    assert len(run.stage_events) == 40
+
+    events_41 = events_40 + [
+        StageEvent(
+            event_id="00000041-0000-4000-8000-000000000000",
+            stage=PublicStage.detecting,
+            started_at="2026-09-17T10:00:00Z",
+            status=StageEventStatus.completed,
+        )
     ]
     with pytest.raises(ValidationError, match="cannot exceed 40 items"):
         Run(
             run_id="11111111-1111-4111-8111-111111111111",
-            owner_sub="user-1",
+            shipment_id="22222222-2222-4222-8222-222222222222",
+            snapshot_id="33333333-3333-4333-8333-333333333333",
             status=RunStatus.running,
             stage=PublicStage.detecting,
-            stage_events=events,
+            stage_events=events_41,
             created_at="2026-09-17T10:00:00Z",
-            updated_at="2026-09-17T10:00:01Z",
         )
+
+
+def test_run_serializes_wire_fields_and_excludes_storage_internals() -> None:
+    run = Run(
+        run_id="11111111-1111-4111-8111-111111111111",
+        shipment_id="22222222-2222-4222-8222-222222222222",
+        snapshot_id="33333333-3333-4333-8333-333333333333",
+        status=RunStatus.queued,
+        stage=PublicStage.preparing,
+        created_at="2026-09-17T10:00:00Z",
+        owner_sub="operator-sub-123",
+        scenario_id="scenario-001",
+        attempt_id="attempt-001",
+        snapshot_ref=ArtifactRef(
+            key="snapshots/snap.json",
+            sha256="1dbe7dc1667e3e5eccb954402eeee1a6b06237001bc82ff6953459d8b3b6c8ea",
+        ),
+    )
+    dumped = run.model_dump(mode="json")
+    assert dumped["run_id"] == "11111111-1111-4111-8111-111111111111"
+    assert dumped["shipment_id"] == "22222222-2222-4222-8222-222222222222"
+    assert dumped["snapshot_id"] == "33333333-3333-4333-8333-333333333333"
+    assert "owner_sub" not in dumped
+    assert "scenario_id" not in dumped
+    assert "attempt_id" not in dumped
+    assert "snapshot_ref" not in dumped
+    assert "report_ref" not in dumped
+    assert "lease_expires_at" not in dumped
 
 
 def test_artifact_ref_validates_sha256_length_and_hex() -> None:
@@ -443,3 +564,186 @@ def test_queue_message_model() -> None:
         snapshot_id="22222222-2222-4222-8222-222222222222",
     )
     assert qm.schema_version == "1.0"
+
+
+# ── Evidence & Report Tests ─────────────────────────────────────────────────
+
+
+def test_evidence_interval_validation() -> None:
+    interval = EvidenceInterval(
+        start_at="2026-09-17T10:00:00Z",
+        end_at="2026-09-17T10:15:00Z",
+    )
+    assert interval.start_at <= interval.end_at
+
+    with pytest.raises(ValidationError, match="start_at cannot be after end_at"):
+        EvidenceInterval(
+            start_at="2026-09-17T10:15:00Z",
+            end_at="2026-09-17T10:00:00Z",
+        )
+
+
+def _make_valid_report(**overrides: Any) -> dict[str, Any]:
+    snapshot_id = "11111111-1111-4111-8111-111111111111"
+    ev_id = "00000000-0000-4000-8000-000000000001"
+    ev_ref = {
+        "evidence_id": ev_id,
+        "snapshot_id": snapshot_id,
+        "kind": "event",
+        "record_ids": ["22222222-2222-4222-8222-222222222222"],
+        "summary": "Door open event at 10:10:00Z",
+        "observed_at": "2026-09-17T10:10:00Z",
+    }
+    payload: dict[str, Any] = {
+        "report_id": "33333333-3333-4333-8333-333333333333",
+        "run_id": "44444444-4444-4444-8444-444444444444",
+        "snapshot_id": snapshot_id,
+        "snapshot_sha256": "5c957e84ca3b58be421ec56db1e26aa54f7627a8e2cb962c040d12e841fa5a72",
+        "schema_version": "1.0",
+        "detector_version": "1.0.0",
+        "prompt_version": "1.0.0",
+        "model_id": "amazon.nova-lite-v1:0",
+        "created_at": "2026-09-17T10:50:00Z",
+        "cutoff_at": "2026-09-17T10:45:00Z",
+        "measurements": [
+            {
+                "sensor_id": "55555555-5555-4555-8555-555555555555",
+                "first_observed_out_at": "2026-09-17T10:15:00Z",
+                "last_observed_out_at": "2026-09-17T10:25:00Z",
+                "estimated_out_of_range_seconds": 600.0,
+                "unknown_duration_seconds": 0.0,
+                "sample_count": 45,
+                "observed_min_c": 4.5,
+                "observed_max_c": 11.2,
+                "censored_start": False,
+                "censored_end": False,
+                "coverage_status": "complete",
+                "evidence_ids": [ev_id],
+            }
+        ],
+        "outcome": "hypothesis_supported",
+        "primary_hypothesis": "door_exposure",
+        "hypotheses": [
+            {
+                "hypothesis": "door_exposure",
+                "assessment": "supported",
+                "supporting_evidence_ids": [ev_id],
+                "conflicting_evidence_ids": [],
+                "missing_evidence": [],
+                "explanation": "Door open event precedes temperature excursion.",
+            }
+        ],
+        "next_checks": [
+            {
+                "code": "inspect_door",
+                "reason": "Verify door seal integrity.",
+                "related_evidence_ids": [ev_id],
+            }
+        ],
+        "limitations": ["Simulated environment"],
+        "verification": {
+            "status": "passed",
+            "errors": [],
+            "warnings": [],
+        },
+        "generation_mode": "bedrock",
+        "review_required": True,
+        "evidence": [ev_ref],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_report_valid_construction_with_evidence() -> None:
+    data = _make_valid_report()
+    report = Report.model_validate(data)
+    assert report.outcome == Outcome.hypothesis_supported
+    assert len(report.evidence) == 1
+    dumped = report.model_dump(mode="json")
+    assert "evidence" in dumped
+    assert dumped["evidence"][0]["evidence_id"] == "00000000-0000-4000-8000-000000000001"
+
+
+def test_report_rejects_evidence_with_mismatched_snapshot_id() -> None:
+    data = _make_valid_report()
+    data["evidence"][0]["snapshot_id"] = "99999999-9999-4999-8999-999999999999"
+    with pytest.raises(ValidationError, match="does not match report snapshot_id"):
+        Report.model_validate(data)
+
+
+def test_report_rejects_hypothesis_with_unknown_supporting_evidence_id() -> None:
+    data = _make_valid_report()
+    data["hypotheses"][0]["supporting_evidence_ids"] = ["99999999-9999-4999-8999-999999999999"]
+    with pytest.raises(ValidationError, match="cites unknown supporting evidence_id"):
+        Report.model_validate(data)
+
+
+def test_report_rejects_hypothesis_with_unknown_conflicting_evidence_id() -> None:
+    data = _make_valid_report()
+    data["hypotheses"][0]["conflicting_evidence_ids"] = ["99999999-9999-4999-8999-999999999999"]
+    with pytest.raises(ValidationError, match="cites unknown conflicting evidence_id"):
+        Report.model_validate(data)
+
+
+def test_report_rejects_next_check_with_unknown_related_evidence_id() -> None:
+    data = _make_valid_report()
+    data["next_checks"][0]["related_evidence_ids"] = ["99999999-9999-4999-8999-999999999999"]
+    with pytest.raises(ValidationError, match="cites unknown related evidence_id"):
+        Report.model_validate(data)
+
+
+def test_report_rejects_measurement_with_unknown_evidence_id() -> None:
+    data = _make_valid_report()
+    data["measurements"][0]["evidence_ids"] = ["99999999-9999-4999-8999-999999999999"]
+    with pytest.raises(ValidationError, match="cites unknown evidence_id"):
+        Report.model_validate(data)
+
+
+def test_evidence_ref_model() -> None:
+    ev = EvidenceRef(
+        evidence_id="00000000-0000-4000-8000-000000000001",
+        snapshot_id="11111111-1111-4111-8111-111111111111",
+        kind=EvidenceKind.event,
+        record_ids=["22222222-2222-4222-8222-222222222222"],
+        summary="Door open event",
+        observed_at="2026-09-17T10:10:00Z",
+    )
+    assert ev.kind == EvidenceKind.event
+    assert ev.evidence_id == "00000000-0000-4000-8000-000000000001"
+
+
+def test_hypothesis_and_verification_models() -> None:
+    hyp = Hypothesis(
+        hypothesis=HypothesisType.door_exposure,
+        assessment="supported",
+        supporting_evidence_ids=["00000000-0000-4000-8000-000000000001"],
+        conflicting_evidence_ids=[],
+        missing_evidence=[],
+        explanation="Door open event correlates with excursion.",
+    )
+    assert hyp.hypothesis == HypothesisType.door_exposure
+
+    ver = Verification(
+        status=VerificationStatus.passed,
+        errors=[],
+        warnings=[],
+    )
+    assert ver.status == VerificationStatus.passed
+
+
+def test_report_summary_model() -> None:
+    rs = ReportSummary(
+        outcome=Outcome.hypothesis_supported,
+        primary_hypothesis=HypothesisType.door_exposure,
+        review_required=True,
+    )
+    assert rs.outcome == Outcome.hypothesis_supported
+    assert rs.primary_hypothesis == HypothesisType.door_exposure
+
+
+def test_report_generation_mode() -> None:
+    data = _make_valid_report(generation_mode=GenerationMode.bedrock.value)
+    report = Report.model_validate(data)
+    assert report.generation_mode == GenerationMode.bedrock
+
+
