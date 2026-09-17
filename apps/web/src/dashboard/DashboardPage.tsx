@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { demoReport, demoRun, demoSnapshot } from "./mockData";
 import { TelemetryChart } from "./TelemetryChart";
 import { useRunData } from "./useRunData";
@@ -50,7 +50,7 @@ export function DashboardPage() {
   const primaryMeasurement = report.measurements[0];
   const copy = outcomeCopy(report);
   const finding = report.hypotheses.find((item) => item.hypothesis === report.primary_hypothesis);
-  const evidence = useMemo(() => report.evidence.length > 0 ? report.evidence : fixtureEvidence(snapshot), [report.evidence, snapshot]);
+  const evidence = report.evidence.length > 0 ? report.evidence : fixtureEvidence(snapshot);
 
   return <main className="min-h-screen bg-slate-50 text-slate-950"><div className="mx-auto max-w-[1440px] p-5 lg:p-8">
     {live.source === "fixture" && <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-xs font-medium text-amber-800">Demo fixture mode — no live backend data is being shown.</div>}
