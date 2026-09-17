@@ -1,0 +1,75 @@
+{
+  "report_id": "c1000000-0000-4000-8000-000000000003",
+  "run_id": "8c0a2b91-4d1e-450a-9d21-f8a1e2b3c4d5",
+  "snapshot_id": "27b7281c-f4f5-5165-a244-10d1010db2bc",
+  "snapshot_sha256": "1dbe7dc1667e3e5eccb954402eeee1a6b06237001bc82ff6953459d8b3b6c8ea",
+  "schema_version": "1.0",
+  "detector_version": "1.0.0",
+  "prompt_version": null,
+  "model_id": null,
+  "created_at": "2026-09-17T10:00:30Z",
+  "cutoff_at": "2026-09-17T10:45:00Z",
+  "measurements": [
+    {
+      "sensor_id": "7810cdd7-2451-517a-bcd0-b344b2d85266",
+      "role": "reference",
+      "excursion_detected": true,
+      "first_observed_out_at": "2026-09-17T10:15:00Z",
+      "last_observed_out_at": "2026-09-17T10:28:00Z",
+      "estimated_out_of_range_seconds": 780.0,
+      "unknown_duration_seconds": 0.0,
+      "sample_count": 46,
+      "observed_min_c": 4.84,
+      "observed_max_c": 12.3,
+      "censored_start": false,
+      "censored_end": false,
+      "coverage_status": "full",
+      "evidence_ids": [
+        "91000000-0000-4000-8000-000000000001"
+      ]
+    },
+    {
+      "sensor_id": "a8582adc-8b50-5b08-a39d-2ba72a4567c7",
+      "role": "comparison",
+      "excursion_detected": false,
+      "first_observed_out_at": null,
+      "last_observed_out_at": null,
+      "estimated_out_of_range_seconds": 0.0,
+      "unknown_duration_seconds": 0.0,
+      "sample_count": 46,
+      "observed_min_c": 5.04,
+      "observed_max_c": 5.36,
+      "censored_start": false,
+      "censored_end": false,
+      "coverage_status": "full",
+      "evidence_ids": [
+        "91000000-0000-4000-8000-000000000002"
+      ]
+    }
+  ],
+  "outcome": "unresolved",
+  "primary_hypothesis": null,
+  "hypotheses": [],
+  "next_checks": [
+    {
+      "action_code": "quality_review",
+      "reason": "Automated AI investigation unavailable; deterministic metrics require manual quality review.",
+      "evidence_ids": [
+        "91000000-0000-4000-8000-000000000001"
+      ]
+    }
+  ],
+  "limitations": [
+    "AI model unavailable; deterministic analysis only",
+    "Analysis based on synthetic simulated telemetry."
+  ],
+  "verification": {
+    "status": "passed",
+    "errors": [],
+    "warnings": [
+      "Model invocation disabled or failed; falling back to deterministic-only review"
+    ]
+  },
+  "generation_mode": "deterministic_only",
+  "review_required": true
+}

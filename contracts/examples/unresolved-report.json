@@ -1,0 +1,111 @@
+{
+  "report_id": "c1000000-0000-4000-8000-000000000002",
+  "run_id": "8c0a2b91-4d1e-450a-9d21-f8a1e2b3c4d5",
+  "snapshot_id": "27b7281c-f4f5-5165-a244-10d1010db2bc",
+  "snapshot_sha256": "1dbe7dc1667e3e5eccb954402eeee1a6b06237001bc82ff6953459d8b3b6c8ea",
+  "schema_version": "1.0",
+  "detector_version": "1.0.0",
+  "prompt_version": "1.0.0",
+  "model_id": "amazon.nova-lite-v1:0",
+  "created_at": "2026-09-17T10:00:50Z",
+  "cutoff_at": "2026-09-17T10:45:00Z",
+  "measurements": [
+    {
+      "sensor_id": "7810cdd7-2451-517a-bcd0-b344b2d85266",
+      "role": "reference",
+      "excursion_detected": true,
+      "first_observed_out_at": "2026-09-17T10:18:00Z",
+      "last_observed_out_at": "2026-09-17T10:30:00Z",
+      "estimated_out_of_range_seconds": 720.0,
+      "unknown_duration_seconds": 0.0,
+      "sample_count": 46,
+      "observed_min_c": 4.3,
+      "observed_max_c": 8.9,
+      "censored_start": false,
+      "censored_end": false,
+      "coverage_status": "full",
+      "evidence_ids": [
+        "91000000-0000-4000-8000-000000000001"
+      ]
+    },
+    {
+      "sensor_id": "a8582adc-8b50-5b08-a39d-2ba72a4567c7",
+      "role": "comparison",
+      "excursion_detected": false,
+      "first_observed_out_at": null,
+      "last_observed_out_at": null,
+      "estimated_out_of_range_seconds": 0.0,
+      "unknown_duration_seconds": 0.0,
+      "sample_count": 46,
+      "observed_min_c": 4.5,
+      "observed_max_c": 6.1,
+      "censored_start": false,
+      "censored_end": false,
+      "coverage_status": "full",
+      "evidence_ids": [
+        "91000000-0000-4000-8000-000000000002"
+      ]
+    }
+  ],
+  "outcome": "unresolved",
+  "primary_hypothesis": null,
+  "hypotheses": [
+    {
+      "hypothesis": "door_exposure",
+      "assessment": "insufficient",
+      "supporting_evidence_ids": [],
+      "conflicting_evidence_ids": [],
+      "missing_evidence": [
+        "door_state telemetry missing from recording unit"
+      ],
+      "explanation": "Door state telemetry is completely absent during the excursion window; cannot verify whether cargo door was opened."
+    },
+    {
+      "hypothesis": "refrigeration_problem",
+      "assessment": "insufficient",
+      "supporting_evidence_ids": [],
+      "conflicting_evidence_ids": [],
+      "missing_evidence": [
+        "refrigeration unit compressor power telemetry"
+      ],
+      "explanation": "Compressor run-state telemetry is missing; unable to confirm or rule out mechanical refrigeration failure."
+    },
+    {
+      "hypothesis": "sensor_disagreement",
+      "assessment": "insufficient",
+      "supporting_evidence_ids": [],
+      "conflicting_evidence_ids": [],
+      "missing_evidence": [
+        "secondary calibration certificate baseline"
+      ],
+      "explanation": "Both sensors recorded elevated temperatures concurrently, but without unit diagnostic telemetry drift cannot be isolated."
+    }
+  ],
+  "next_checks": [
+    {
+      "action_code": "request_missing_logs",
+      "reason": "Request vehicle telematics gateway logs and refrigeration controller diagnostic logs.",
+      "evidence_ids": []
+    },
+    {
+      "action_code": "quality_review",
+      "reason": "Unresolved temperature excursion with missing event telemetry requires QA review.",
+      "evidence_ids": [
+        "91000000-0000-4000-8000-000000000001"
+      ]
+    }
+  ],
+  "limitations": [
+    "Missing door and refrigeration event telemetry prevents hypothesis resolution.",
+    "Analysis based on synthetic simulated telemetry."
+  ],
+  "verification": {
+    "status": "passed",
+    "errors": [],
+    "warnings": [
+      "No primary hypothesis could be supported due to incomplete event telemetry"
+    ]
+  },
+  "generation_mode": "bedrock",
+  "review_required": true
+}

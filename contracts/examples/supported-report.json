@@ -1,0 +1,110 @@
+{
+  "report_id": "c1000000-0000-4000-8000-000000000001",
+  "run_id": "8c0a2b91-4d1e-450a-9d21-f8a1e2b3c4d5",
+  "snapshot_id": "27b7281c-f4f5-5165-a244-10d1010db2bc",
+  "snapshot_sha256": "1dbe7dc1667e3e5eccb954402eeee1a6b06237001bc82ff6953459d8b3b6c8ea",
+  "schema_version": "1.0",
+  "detector_version": "1.0.0",
+  "prompt_version": "1.0.0",
+  "model_id": "amazon.nova-lite-v1:0",
+  "created_at": "2026-09-17T10:00:45Z",
+  "cutoff_at": "2026-09-17T10:45:00Z",
+  "measurements": [
+    {
+      "sensor_id": "7810cdd7-2451-517a-bcd0-b344b2d85266",
+      "role": "reference",
+      "excursion_detected": true,
+      "first_observed_out_at": "2026-09-17T10:15:00Z",
+      "last_observed_out_at": "2026-09-17T10:28:00Z",
+      "estimated_out_of_range_seconds": 780.0,
+      "unknown_duration_seconds": 0.0,
+      "sample_count": 46,
+      "observed_min_c": 4.84,
+      "observed_max_c": 12.3,
+      "censored_start": false,
+      "censored_end": false,
+      "coverage_status": "full",
+      "evidence_ids": [
+        "91000000-0000-4000-8000-000000000001"
+      ]
+    },
+    {
+      "sensor_id": "a8582adc-8b50-5b08-a39d-2ba72a4567c7",
+      "role": "comparison",
+      "excursion_detected": false,
+      "first_observed_out_at": null,
+      "last_observed_out_at": null,
+      "estimated_out_of_range_seconds": 0.0,
+      "unknown_duration_seconds": 0.0,
+      "sample_count": 46,
+      "observed_min_c": 5.04,
+      "observed_max_c": 5.36,
+      "censored_start": false,
+      "censored_end": false,
+      "coverage_status": "full",
+      "evidence_ids": [
+        "91000000-0000-4000-8000-000000000002"
+      ]
+    }
+  ],
+  "outcome": "hypothesis_supported",
+  "primary_hypothesis": "door_exposure",
+  "hypotheses": [
+    {
+      "hypothesis": "door_exposure",
+      "assessment": "supported",
+      "supporting_evidence_ids": [
+        "91000000-0000-4000-8000-000000000001",
+        "7dada556-2a6f-515f-bb1b-f5bb79819eaf"
+      ],
+      "conflicting_evidence_ids": [],
+      "missing_evidence": [],
+      "explanation": "Recorded cargo door opening at 10:15:00Z aligns with observed temperature spike above 8\u00b0C on front reference air sensor, with temperature recovery following door closure at 10:28:00Z."
+    },
+    {
+      "hypothesis": "refrigeration_problem",
+      "assessment": "contradicted",
+      "supporting_evidence_ids": [],
+      "conflicting_evidence_ids": [
+        "43470328-4a34-5647-9989-df5e9ecaeebf"
+      ],
+      "missing_evidence": [],
+      "explanation": "Refrigeration controller reported running state without fault codes throughout the excursion interval."
+    },
+    {
+      "hypothesis": "sensor_disagreement",
+      "assessment": "insufficient",
+      "supporting_evidence_ids": [],
+      "conflicting_evidence_ids": [],
+      "missing_evidence": [],
+      "explanation": "Comparison sensor in rear cargo compartment remained shielded from door thermal draft, consistent with localized door exposure rather than sensor calibration failure."
+    }
+  ],
+  "next_checks": [
+    {
+      "action_code": "inspect_door",
+      "reason": "Inspect door seals and latch mechanism for door seal integrity.",
+      "evidence_ids": [
+        "7dada556-2a6f-515f-bb1b-f5bb79819eaf"
+      ]
+    },
+    {
+      "action_code": "quality_review",
+      "reason": "Conduct quality review of product exposure duration against handling policy tolerance.",
+      "evidence_ids": [
+        "91000000-0000-4000-8000-000000000001"
+      ]
+    }
+  ],
+  "limitations": [
+    "Analysis is based on synthetic simulated telemetry.",
+    "Temperature excursion metrics reflect air temperature, not internal product core temperature."
+  ],
+  "verification": {
+    "status": "passed",
+    "errors": [],
+    "warnings": []
+  },
+  "generation_mode": "bedrock",
+  "review_required": true
+}

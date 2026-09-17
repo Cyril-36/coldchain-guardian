@@ -1,0 +1,51 @@
+{
+  "run_id": "8c0a2b91-4d1e-450a-9d21-f8a1e2b3c4d5",
+  "owner_sub": "operator-cyril-001",
+  "status": "running",
+  "stage": "collecting_evidence",
+  "stage_events": [
+    {
+      "event_id": "e1000000-0000-4000-8000-000000000001",
+      "stage": "preparing",
+      "tool_name": null,
+      "started_at": "2026-09-17T10:00:01Z",
+      "finished_at": "2026-09-17T10:00:02Z",
+      "status": "completed",
+      "evidence_ids": []
+    },
+    {
+      "event_id": "e1000000-0000-4000-8000-000000000002",
+      "stage": "detecting",
+      "tool_name": null,
+      "started_at": "2026-09-17T10:00:02Z",
+      "finished_at": "2026-09-17T10:00:03Z",
+      "status": "completed",
+      "evidence_ids": [
+        "91000000-0000-4000-8000-000000000001"
+      ]
+    },
+    {
+      "event_id": "e1000000-0000-4000-8000-000000000003",
+      "stage": "collecting_evidence",
+      "tool_name": "get_door_events",
+      "started_at": "2026-09-17T10:00:03Z",
+      "finished_at": null,
+      "status": "started",
+      "evidence_ids": []
+    }
+  ],
+  "created_at": "2026-09-17T10:00:00Z",
+  "updated_at": "2026-09-17T10:00:03Z",
+  "snapshot_ref": {
+    "key": "snapshots/27b7281c-f4f5-5165-a244-10d1010db2bc.json",
+    "sha256": "1dbe7dc1667e3e5eccb954402eeee1a6b06237001bc82ff6953459d8b3b6c8ea"
+  },
+  "report_ref": null,
+  "scenario_id": "door_exposure",
+  "error": null,
+  "review": null,
+  "generation_mode": "bedrock",
+  "is_public_demo": false,
+  "attempt_id": "b1000000-0000-4000-8000-000000000001",
+  "lease_expires_at": "2026-09-17T10:02:33Z"
+}

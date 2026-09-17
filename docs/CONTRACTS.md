@@ -43,7 +43,7 @@ Detector is a pure function of snapshot and policy, with a version number.
 3. For consecutive samples of the same sensor separated by at most max_gap_seconds, use linear interpolation to estimate threshold crossings. Integrate the out-of-range portion of each valid interval.
 4. For wider gaps, do not interpolate. Record `unknown_duration_seconds` and disjoint intervals. State the duration as an estimate over observed coverage, never as an exact total exposure.
 5. If the first/last sample is outside range, mark the interval left/right-censored; do not extrapolate outside the snapshot.
-6. Report `first_observed_out_at`, `last_observed_out_at`, `estimated_out_of_range_seconds`, `unknown_duration_seconds`, `sample_count`, `observed_min_c`, `observed_max_c`, `censored_start`, `censored_end`, `coverage_status` per sensor.
+6. Report `first_observed_out_at`, `last_observed_out_at`, `estimated_out_of_range_seconds`, `unknown_duration_seconds`, `sample_count`, `observed_min_c`, `observed_max_c`, `censored_start`, `censored_end`, `coverage_status` (`full`, `partial`, `unknown`) per sensor.
 7. A normal control returns `no_excursion` and skips Bedrock. A sensor-only anomaly still requires review; normal comparison data is not proof that the reference or product is safe.
 8. If a dataset contains multiple separate excursion windows beyond the MVP's single-window assumption, return `needs_review` with `multiple_windows_unsupported`; do not collapse them into one invented incident.
 
@@ -60,7 +60,7 @@ Report fields:
 - outcome: `hypothesis_supported`, `unresolved`, or `no_excursion`.
 - primary_hypothesis: `door_exposure`, `refrigeration_problem`, `sensor_disagreement`, or null.
 - hypotheses: each has the same hypothesis enum, assessment (`supported/contradicted/insufficient`), supporting_evidence_ids, conflicting_evidence_ids, missing_evidence and a short explanation.
-- next_checks: structured action code, reason and related evidence IDs. Allowed codes: `inspect_door`, `check_refrigeration`, `verify_sensor`, `request_missing_logs`, `quality_review`.
+- next_checks: structured objects with `action_code` (allowed: `inspect_door`, `check_refrigeration`, `verify_sensor`, `request_missing_logs`, `quality_review`; accepts alias `code`), `reason` (string), and `evidence_ids` (list of UUIDs; accepts alias `related_evidence_ids`).
 - limitations: strings, including simulation and any data gaps.
 - verification: status (`passed/blocked`), errors and warnings. “Passed” means schema/numeric/reference checks passed; it does not certify the cause.
 - generation_mode: `bedrock` or `deterministic_only`.
@@ -108,10 +108,11 @@ Polling: 2 seconds while visible/running; back off to 5 seconds after 30 seconds
 
 ## Storage interface
 
-Leader publishes Protocol definitions and a memory implementation before backend teammate begins AWS adapter integration:
+Leader publishes Protocol definitions (and later a memory implementation) before backend teammate begins AWS adapter integration:
 
 ```text
 create_or_get_run(owner_sub, idempotency_key, request_hash, metadata) -> Run
+attach_snapshot(run_id, snapshot_ref) -> None
 put_snapshot(snapshot) -> ArtifactRef(key, sha256)
 get_snapshot(snapshot_ref) -> Snapshot
 get_run(run_id) -> Run | None
@@ -125,6 +126,8 @@ save_review(run_id, actor_sub, report_id, decision, note) -> Review
 list_public_runs() -> list[RunSummary]
 enqueue_run(run_id, snapshot_id, schema_version) -> None
 ```
+
+In the state machine flow, `attach_snapshot(run_id, snapshot_ref)` explicitly records the durable snapshot artifact reference on the pending run prior to queue dispatch. In `claim_run`, `now` is a timezone-aware UTC datetime and `lease_seconds` is integer duration. `Review` contains `review_id`, `run_id`, `actor_sub`, `report_id`, `decision`, `note` (max 1,000 chars), and `created_at`.
 
 Use one DynamoDB table: `RUN#uuid/META`, `RUN#uuid/REVIEW#uuid`, `IDEMP#user#hash/REQUEST`, `LIMIT#date/COUNT`, `ACTIVE#user/LEASE`, `PUBLIC/DEMO#run_id`. Define transactional writes for idempotency/caps and conditional writes for claims. No scans in request paths. Put telemetry in S3, not a giant DynamoDB item. S3 keys use opaque snapshot/report IDs; report objects are immutable.
 
