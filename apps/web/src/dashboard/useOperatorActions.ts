@@ -24,6 +24,12 @@ export function useOperatorActions(runId: string | null) {
     return createApiEndpoints(new ApiClient({ baseUrl, tokenProvider: auth.getAccessToken }));
   }, [auth.authenticated, auth.getAccessToken]);
 
+  const getPublicApi = useCallback(() => {
+    const baseUrl = import.meta.env.VITE_API_BASE_URL;
+    if (!baseUrl) throw new Error("API base URL is not configured");
+    return createApiEndpoints(new ApiClient({ baseUrl }));
+  }, []);
+
   const createRun = useCallback(async () => {
     if (runCreatingRef.current) return;
     runCreatingRef.current = true;
@@ -34,10 +40,8 @@ export function useOperatorActions(runId: string | null) {
       const scenarios = await api.listScenarios();
       const scenario = scenarios[0];
       if (!scenario) throw new Error("No investigation scenarios are available");
-
       const request = createRunAttempt(runRequestRef.current, scenario.scenario_id);
       runRequestRef.current = request;
-
       const result = await api.createRun({ scenario_id: request.scenarioId, seed: request.seed }, request.idempotencyKey);
       runRequestRef.current = null;
       window.location.assign(`${window.location.pathname}?run_id=${encodeURIComponent(result.run_id)}`);
@@ -59,12 +63,14 @@ export function useOperatorActions(runId: string | null) {
     finally { setReviewSubmitting(false); }
   }, [getApi, runId]);
 
-  const downloadReport = useCallback(async () => {
-    if (!runId) throw new Error("A protected run is required");
+  const downloadReport = useCallback(async (publicDemo = false) => {
+    if (!runId) throw new Error("A run is required");
     setError(null);
-    try { const result = await getApi().getDownload(runId); window.location.assign(result.url); }
-    catch (cause) { const nextError = cause instanceof Error ? cause : new Error("Unable to download report"); setError(nextError); throw nextError; }
-  }, [getApi, runId]);
+    try {
+      const result = publicDemo ? await getPublicApi().getDemoDownload(runId) : await getApi().getDownload(runId);
+      window.location.assign(result.url);
+    } catch (cause) { const nextError = cause instanceof Error ? cause : new Error("Unable to download report"); setError(nextError); throw nextError; }
+  }, [getApi, getPublicApi, runId]);
 
   return { runCreating, reviewSubmitting, review, error, createRun, submitReview, downloadReport };
 }
