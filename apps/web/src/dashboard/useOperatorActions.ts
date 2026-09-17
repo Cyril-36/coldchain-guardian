@@ -10,41 +10,45 @@ export function useOperatorActions(runId: string | null) {
   const [review, setReview] = useState<Review | null>(null);
   const [error, setError] = useState<Error | null>(null);
 
-  const submitReview = useCallback(async (request: CreateReviewRequest) => {
-    if (!runId || !auth.authenticated) throw new Error("Operator session is required");
-    setReviewSubmitting(true);
+  const getApi = useCallback(() => {
+    if (!auth.authenticated) throw new Error("Operator session is required");
+    const baseUrl = import.meta.env.VITE_API_BASE_URL;
+    if (!baseUrl) throw new Error("API base URL is not configured");
+    return createApiEndpoints(new ApiClient({ baseUrl, tokenProvider: auth.getAccessToken }));
+  }, [auth.authenticated, auth.getAccessToken]);
+
+  const createRun = useCallback(async () => {
     setError(null);
     try {
-      const baseUrl = import.meta.env.VITE_API_BASE_URL;
-      if (!baseUrl) throw new Error("API base URL is not configured");
-      const client = new ApiClient({ baseUrl, tokenProvider: auth.getAccessToken });
-      const result = await createApiEndpoints(client).submitReview(runId, request);
-      setReview(result);
-      return result;
+      const api = getApi();
+      const scenarios = await api.listScenarios();
+      const scenario = scenarios[0];
+      if (!scenario) throw new Error("No investigation scenarios are available");
+      const seed = crypto.getRandomValues(new Uint32Array(1))[0];
+      const idempotencyKey = crypto.randomUUID();
+      const result = await api.createRun({ scenario_id: scenario.scenario_id, seed }, idempotencyKey);
+      window.location.assign(`${window.location.pathname}?run_id=${encodeURIComponent(result.run_id)}`);
     } catch (cause) {
-      const nextError = cause instanceof Error ? cause : new Error("Unable to submit operator review");
+      const nextError = cause instanceof Error ? cause : new Error("Unable to start investigation");
       setError(nextError);
       throw nextError;
-    } finally {
-      setReviewSubmitting(false);
     }
-  }, [auth.authenticated, auth.getAccessToken, runId]);
+  }, [getApi]);
+
+  const submitReview = useCallback(async (request: CreateReviewRequest) => {
+    if (!runId) throw new Error("A protected run is required");
+    setReviewSubmitting(true); setError(null);
+    try { const result = await getApi().submitReview(runId, request); setReview(result); return result; }
+    catch (cause) { const nextError = cause instanceof Error ? cause : new Error("Unable to submit operator review"); setError(nextError); throw nextError; }
+    finally { setReviewSubmitting(false); }
+  }, [getApi, runId]);
 
   const downloadReport = useCallback(async () => {
-    if (!runId || !auth.authenticated) throw new Error("Operator session is required");
+    if (!runId) throw new Error("A protected run is required");
     setError(null);
-    try {
-      const baseUrl = import.meta.env.VITE_API_BASE_URL;
-      if (!baseUrl) throw new Error("API base URL is not configured");
-      const client = new ApiClient({ baseUrl, tokenProvider: auth.getAccessToken });
-      const result = await createApiEndpoints(client).getDownload(runId);
-      window.location.assign(result.url);
-    } catch (cause) {
-      const nextError = cause instanceof Error ? cause : new Error("Unable to download report");
-      setError(nextError);
-      throw nextError;
-    }
-  }, [auth.authenticated, auth.getAccessToken, runId]);
+    try { const result = await getApi().getDownload(runId); window.location.assign(result.url); }
+    catch (cause) { const nextError = cause instanceof Error ? cause : new Error("Unable to download report"); setError(nextError); throw nextError; }
+  }, [getApi, runId]);
 
-  return { reviewSubmitting, review, error, submitReview, downloadReport };
+  return { reviewSubmitting, review, error, createRun, submitReview, downloadReport };
 }
