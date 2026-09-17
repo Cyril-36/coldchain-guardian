@@ -25,6 +25,7 @@ export function useOperatorActions(runId: string | null) {
   const [review, setReview] = useState<Review | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const runRequestRef = useRef<RunCreationAttempt | null>(null);
+  const runCreatingRef = useRef(false);
 
   const getApi = useCallback(() => {
     if (!auth.authenticated) throw new Error("Operator session is required");
@@ -34,7 +35,8 @@ export function useOperatorActions(runId: string | null) {
   }, [auth.authenticated, auth.getAccessToken]);
 
   const createRun = useCallback(async () => {
-    if (runCreating) return;
+    if (runCreatingRef.current) return;
+    runCreatingRef.current = true;
     setRunCreating(true);
     setError(null);
     try {
@@ -54,9 +56,10 @@ export function useOperatorActions(runId: string | null) {
       setError(nextError);
       throw nextError;
     } finally {
+      runCreatingRef.current = false;
       setRunCreating(false);
     }
-  }, [getApi, runCreating]);
+  }, [getApi]);
 
   const submitReview = useCallback(async (request: CreateReviewRequest) => {
     if (!runId) throw new Error("A protected run is required");
