@@ -1,7 +1,6 @@
 import { useMemo } from "react";
 import { CartesianGrid, Line, LineChart, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { Snapshot } from "../types/contracts";
-
 interface ChartPoint { observed_at: string; timestamp: number; sensor_a: number | null; sensor_b: number | null; sensor_a_event_id: string | null; sensor_b_event_id: string | null; }
 interface Gap { start: number; end: number; sensor: "A" | "B"; }
 interface TelemetryChartProps { snapshot: Snapshot; highlightedRecordIds?: Set<string>; onRecordSelect?: (recordIds: string[]) => void; }
