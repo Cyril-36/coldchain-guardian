@@ -45,6 +45,7 @@ class RunRecord:
     attempt_id: str | None = None
     lease_expires_at: datetime | None = None
     stage_events: list[dict[str, Any]] = field(default_factory=list)
+    snapshot_ref: ArtifactRef | None = None
     report_ref: ArtifactRef | None = None
     summary: dict[str, Any] | None = None
     is_public_demo: bool = False

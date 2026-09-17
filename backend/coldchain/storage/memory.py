@@ -65,11 +65,19 @@ class MemoryStorage:
         report_validator: ArtifactValidator = copy_mapping,
         id_factory: Callable[[], str] | None = None,
         clock: Callable[[], datetime] | None = None,
+        daily_run_limit: int = 50,
+        active_run_lease_seconds: int = 300,
     ) -> None:
+        if daily_run_limit <= 0:
+            raise ValueError("daily_run_limit must be positive")
+        if active_run_lease_seconds <= 0:
+            raise ValueError("active_run_lease_seconds must be positive")
         self._snapshot_validator = snapshot_validator
         self._report_validator = report_validator
         self._id_factory = id_factory or (lambda: str(uuid4()))
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._daily_run_limit = daily_run_limit
+        self._active_run_lease_seconds = active_run_lease_seconds
         self._lock = RLock()
         self._runs: dict[str, RunRecord] = {}
         self._idempotency: dict[tuple[str, str], tuple[str, str, datetime]] = {}
@@ -100,18 +108,29 @@ class MemoryStorage:
         request_hash: str,
         metadata: Mapping[str, Any],
     ) -> RunRecord:
+        """Atomically reserve idempotency, daily capacity, active ownership, and run."""
+
         scope = (owner_sub, self._key_hash(idempotency_key))
         with self._lock:
+            now = self._clock()
             existing = self._idempotency.get(scope)
             if existing is not None:
                 existing_hash, run_id, expires_at = existing
-                if expires_at > self._clock():
+                if expires_at > now:
                     if existing_hash != request_hash:
                         raise IdempotencyConflict(
                             "idempotency key was already used with different request content"
                         )
                     return self._copy_run(self._require_run(run_id))
                 del self._idempotency[scope]
+
+            utc_date = now.astimezone(UTC).date()
+            current_count = self._daily_counts.get(utc_date, 0)
+            if current_count >= self._daily_run_limit:
+                raise DailyLimitExceeded("UTC daily run limit reached")
+            active = self._active_runs.get(owner_sub)
+            if active is not None and active.expires_at > now:
+                raise ActiveRunConflict("operator already has an active run")
 
             run_id = str(metadata.get("run_id") or self._id_factory())
             if run_id in self._runs:
@@ -126,7 +145,13 @@ class MemoryStorage:
             self._idempotency[scope] = (
                 request_hash,
                 run_id,
-                self._clock() + timedelta(hours=24),
+                now + timedelta(hours=24),
+            )
+            self._daily_counts[utc_date] = current_count + 1
+            self._active_runs[owner_sub] = ActiveRunLease(
+                owner_sub,
+                run_id,
+                now + timedelta(seconds=self._active_run_lease_seconds),
             )
             return self._copy_run(run)
 
@@ -141,6 +166,10 @@ class MemoryStorage:
         with self._lock:
             run = self._require_run(run_id)
             if run.status == "pending_enqueue":
+                if run.snapshot_ref is None:
+                    raise ConditionalWriteConflict(
+                        "run cannot be queued before its snapshot is durable"
+                    )
                 run.status = "queued"
                 return True
             return run.status == "queued"
@@ -271,6 +300,29 @@ class MemoryStorage:
 
     def get_snapshot(self, snapshot_ref: ArtifactRef) -> dict[str, Any]:
         return self._get_artifact(snapshot_ref, "snapshots", self._snapshot_validator)
+
+    def attach_snapshot(self, run_id: str, snapshot_ref: ArtifactRef) -> RunRecord:
+        """Attach one immutable, digest-verified snapshot to a preparing run."""
+
+        self.get_snapshot(snapshot_ref)
+        with self._lock:
+            run = self._require_run(run_id)
+            expected_snapshot_id = run.metadata.get("snapshot_id")
+            if (
+                expected_snapshot_id is not None
+                and expected_snapshot_id != snapshot_ref.artifact_id
+            ):
+                raise ConditionalWriteConflict(
+                    "snapshot does not match the run's reserved snapshot_id"
+                )
+            if run.snapshot_ref is not None:
+                if run.snapshot_ref == snapshot_ref:
+                    return self._copy_run(run)
+                raise ConditionalWriteConflict("run already references a different snapshot")
+            if run.status != "pending_enqueue":
+                raise ConditionalWriteConflict("snapshot can only attach before enqueue")
+            run.snapshot_ref = snapshot_ref
+            return self._copy_run(run)
 
     def put_report(self, report: Mapping[str, Any]) -> ArtifactRef:
         return self._put_artifact(

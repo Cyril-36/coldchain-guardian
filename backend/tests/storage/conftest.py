@@ -46,8 +46,12 @@ def memory() -> MemoryStorage:
 
 
 class FakeAwsError(Exception):
-    def __init__(self, code: str) -> None:
+    def __init__(
+        self, code: str, cancellation_reasons: list[dict[str, str]] | None = None
+    ) -> None:
         self.response = {"Error": {"Code": code, "Message": "provider detail"}}
+        if cancellation_reasons is not None:
+            self.response["CancellationReasons"] = cancellation_reasons
         super().__init__("provider detail must not escape")
 
 

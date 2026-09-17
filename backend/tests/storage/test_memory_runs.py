@@ -57,6 +57,29 @@ def test_same_key_is_scoped_by_operator(memory: MemoryStorage) -> None:
     assert first.run_id != second.run_id
 
 
+def test_run_creation_atomically_reserves_daily_and_active_capacity() -> None:
+    identifiers = iter([stable_uuid("first-run"), stable_uuid("second-run")])
+    storage = MemoryStorage(
+        id_factory=lambda: next(identifiers),
+        clock=lambda: NOW,
+        daily_run_limit=1,
+    )
+    first = _create_run(storage, owner="operator-a")
+    with pytest.raises(DailyLimitExceeded):
+        _create_run(storage, owner="operator-b", key="other")
+    assert storage.get_run(first.run_id) is not None
+    assert storage.get_run(stable_uuid("second-run")) is None
+
+
+def test_run_creation_rejects_second_active_run_without_partial_writes() -> None:
+    identifiers = iter([stable_uuid("first-run"), stable_uuid("second-run")])
+    storage = MemoryStorage(id_factory=lambda: next(identifiers), clock=lambda: NOW)
+    _create_run(storage, key="first")
+    with pytest.raises(ActiveRunConflict):
+        _create_run(storage, key="second")
+    assert storage.get_run(stable_uuid("second-run")) is None
+
+
 def test_idempotency_mapping_can_be_replaced_after_24_hours() -> None:
     current = [NOW]
     identifiers = iter([stable_uuid("first-run"), stable_uuid("second-run")])

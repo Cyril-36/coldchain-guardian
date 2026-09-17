@@ -8,6 +8,7 @@ from coldchain.storage import (
     ActiveRunConflict,
     ArtifactNotFound,
     AwsStorage,
+    ConditionalWriteConflict,
     DailyLimitExceeded,
     ReviewConflict,
 )
@@ -24,6 +25,7 @@ def _storage(dynamo: RecordingDynamo, s3: FakeS3 | None = None) -> AwsStorage:
         s3_client=s3 or FakeS3(),
         dynamodb_client=dynamo,
         id_factory=lambda: stable_uuid("aws-run"),
+        clock=lambda: NOW,
     )
 
 
@@ -50,13 +52,112 @@ def test_create_run_uses_transaction_and_hashed_idempotency_key() -> None:
     run = storage.create_or_get_run("operator", "raw-secret-key", "body-hash", {})
     method, call = dynamo.calls[0]
     assert method == "transact_write_items"
-    assert len(call["TransactItems"]) == 2
+    assert len(call["TransactItems"]) == 4
     serialized = str(call)
     assert "raw-secret-key" not in serialized
     assert "IDEMP#" in serialized
     idempotency_put = call["TransactItems"][0]["Put"]
     assert "expires_at <= :now" in idempotency_put["ConditionExpression"]
     assert run.status == "pending_enqueue"
+
+
+def test_create_run_atomically_reserves_daily_and_active_capacity() -> None:
+    dynamo = RecordingDynamo()
+    storage = _storage(dynamo)
+    storage.create_or_get_run("operator", "key", "body-hash", {})
+    items = dynamo.calls[0][1]["TransactItems"]
+    daily = items[1]["Update"]
+    active = items[2]["Put"]
+    assert daily["Key"]["PK"]["S"] == "LIMIT#2026-09-17"
+    assert "#count < :limit" in daily["ConditionExpression"]
+    assert active["Item"]["PK"]["S"].startswith("ACTIVE#")
+    assert "expires_at <= :now" in active["ConditionExpression"]
+
+
+@pytest.mark.parametrize(
+    ("failed_index", "expected"),
+    [(1, DailyLimitExceeded), (2, ActiveRunConflict)],
+)
+def test_atomic_reservation_maps_capacity_conflicts(failed_index: int, expected: type) -> None:
+    dynamo = RecordingDynamo()
+    reasons = [{"Code": "None"} for _ in range(4)]
+    reasons[failed_index] = {"Code": "ConditionalCheckFailed"}
+    dynamo.queue_error(
+        "transact_write_items",
+        FakeAwsError("TransactionCanceledException", reasons),
+    )
+    with pytest.raises(expected):
+        _storage(dynamo).create_or_get_run("operator", "key", "hash", {})
+
+
+def test_idempotent_retry_wins_over_active_reservation_conflict() -> None:
+    dynamo = RecordingDynamo()
+    reasons = [
+        {"Code": "ConditionalCheckFailed"},
+        {"Code": "None"},
+        {"Code": "ConditionalCheckFailed"},
+        {"Code": "ConditionalCheckFailed"},
+    ]
+    dynamo.queue_error(
+        "transact_write_items",
+        FakeAwsError("TransactionCanceledException", reasons),
+    )
+    run_id = stable_uuid("existing-run")
+    dynamo.queue_response(
+        "get_item",
+        {"Item": {"request_hash": {"S": "hash"}, "run_id": {"S": run_id}}},
+    )
+    dynamo.queue_response(
+        "get_item", {"Item": _run_item(run_id, status="pending_enqueue", attempt="")}
+    )
+    run = _storage(dynamo).create_or_get_run("operator", "key", "hash", {})
+    assert run.run_id == run_id
+
+
+def test_attach_snapshot_is_conditional_and_persists_reference(snapshot: dict) -> None:
+    dynamo = RecordingDynamo()
+    s3 = FakeS3()
+    storage = _storage(dynamo, s3)
+    snapshot_ref = storage.put_snapshot(snapshot)
+    run_id = stable_uuid("snapshot-run")
+    item = _run_item(run_id, status="pending_enqueue", attempt="")
+    item.update(
+        {
+            "snapshot_key": {"S": snapshot_ref.key},
+            "snapshot_sha256": {"S": snapshot_ref.sha256},
+            "snapshot_id": {"S": snapshot_ref.artifact_id},
+        }
+    )
+    dynamo.queue_response("update_item", {"Attributes": item})
+    dynamo.queue_response("get_item", {"Item": _run_item(run_id, status="pending_enqueue")})
+    run = storage.attach_snapshot(run_id, snapshot_ref)
+    method, call = dynamo.calls[1]
+    assert method == "update_item"
+    assert "attribute_not_exists(snapshot_key)" in call["ConditionExpression"]
+    assert run.snapshot_ref == snapshot_ref
+
+
+def test_attach_snapshot_rejects_conflicting_reference(snapshot: dict) -> None:
+    dynamo = RecordingDynamo()
+    s3 = FakeS3()
+    storage = _storage(dynamo, s3)
+    snapshot_ref = storage.put_snapshot(snapshot)
+    dynamo.queue_error("update_item", FakeAwsError("ConditionalCheckFailedException"))
+    existing = _run_item(stable_uuid("snapshot-run"), status="pending_enqueue")
+    existing.update(
+        {
+            "snapshot_key": {"S": f"snapshots/{stable_uuid('other')}.json"},
+            "snapshot_sha256": {"S": "different"},
+            "snapshot_id": {"S": stable_uuid("other")},
+        }
+    )
+    dynamo.queue_response(
+        "get_item",
+        {"Item": _run_item(existing["run_id"]["S"], status="pending_enqueue")},
+    )
+    dynamo.queue_response("get_item", {"Item": existing})
+    with pytest.raises(ConditionalWriteConflict):
+        storage.attach_snapshot(existing["run_id"]["S"], snapshot_ref)
 
 
 def test_claim_run_condition_compares_expiry_and_attempt() -> None:
@@ -135,7 +236,9 @@ def test_mark_queued_only_accepts_pending_enqueue() -> None:
     storage = _storage(dynamo)
     assert storage.mark_queued(stable_uuid("queued-run"))
     _, call = dynamo.calls[0]
-    assert call["ConditionExpression"] == "#status = :pending"
+    assert call["ConditionExpression"] == (
+        "#status = :pending AND attribute_exists(snapshot_key)"
+    )
 
 
 def test_daily_cap_is_single_atomic_update() -> None:

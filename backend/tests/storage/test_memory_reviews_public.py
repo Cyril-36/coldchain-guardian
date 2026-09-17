@@ -55,7 +55,7 @@ def test_public_listing_only_contains_explicitly_curated_runs(
     memory: MemoryStorage,
 ) -> None:
     public = _create_run(memory, key="public")
-    private = _create_run(memory, key="private")
+    private = _create_run(memory, owner="operator-b", key="private")
     memory.set_public_demo(public.run_id, {"label": "curated"})
     listed = memory.list_public_runs()
     assert [item.run_id for item in listed] == [public.run_id]

@@ -24,6 +24,7 @@ from .exceptions import (
     ImmutableArtifactConflict,
     LeaseConflict,
     ReviewConflict,
+    RunNotFound,
     StorageUnavailable,
 )
 from .models import (
@@ -127,7 +128,14 @@ class AwsStorage:
         snapshot_validator: ArtifactValidator = normalize_snapshot,
         report_validator: ArtifactValidator = copy_mapping,
         id_factory: Callable[[], str] | None = None,
+        clock: Callable[[], datetime] | None = None,
+        daily_run_limit: int = 50,
+        active_run_lease_seconds: int = 300,
     ) -> None:
+        if daily_run_limit <= 0:
+            raise ValueError("daily_run_limit must be positive")
+        if active_run_lease_seconds <= 0:
+            raise ValueError("active_run_lease_seconds must be positive")
         if s3_client is None or dynamodb_client is None:
             import boto3  # Imported lazily; constructor injection avoids this in tests.
 
@@ -140,6 +148,9 @@ class AwsStorage:
         self._snapshot_validator = snapshot_validator
         self._report_validator = report_validator
         self._id_factory = id_factory or (lambda: str(uuid4()))
+        self._clock = clock or (lambda: datetime.now(UTC))
+        self._daily_run_limit = daily_run_limit
+        self._active_run_lease_seconds = active_run_lease_seconds
 
     @staticmethod
     def _hash(value: str) -> str:
@@ -191,6 +202,14 @@ class AwsStorage:
                 sha256=_get_s(item, "report_sha256", "") or "",
                 artifact_id=_get_s(item, "report_id", "") or "",
             )
+        snapshot_key = _get_s(item, "snapshot_key")
+        snapshot_ref = None
+        if snapshot_key is not None:
+            snapshot_ref = ArtifactRef(
+                key=snapshot_key,
+                sha256=_get_s(item, "snapshot_sha256", "") or "",
+                artifact_id=_get_s(item, "snapshot_id", "") or "",
+            )
         lease_epoch = _get_n(item, "lease_expires_at")
         return RunRecord(
             run_id=run_id,
@@ -204,6 +223,7 @@ class AwsStorage:
                 datetime.fromtimestamp(lease_epoch, UTC) if lease_epoch is not None else None
             ),
             stage_events=stage_events,
+            snapshot_ref=snapshot_ref,
             report_ref=report_ref,
             summary=json.loads(_get_s(item, "summary_json", "null") or "null"),
             is_public_demo=_get_bool(item, "is_public_demo"),
@@ -216,11 +236,17 @@ class AwsStorage:
         request_hash: str,
         metadata: Mapping[str, Any],
     ) -> RunRecord:
+        """Atomically reserve idempotency, daily capacity, active ownership, and run."""
+
         run_id = str(metadata.get("run_id") or self._id_factory())
         idem_key = self._idempotency_key(owner_sub, idempotency_key)
-        reservation_time = datetime.now(UTC)
+        reservation_time = self._clock()
         now_epoch = int(reservation_time.timestamp())
         expires_at = int((reservation_time + timedelta(hours=24)).timestamp())
+        active_expires_at = int(
+            (reservation_time + timedelta(seconds=self._active_run_lease_seconds)).timestamp()
+        )
+        utc_date = reservation_time.astimezone(UTC).date()
         run_item = {
             **self._run_key(run_id),
             "run_id": _s(run_id),
@@ -240,6 +266,12 @@ class AwsStorage:
             "run_id": _s(run_id),
             "expires_at": _n(expires_at),
         }
+        active_item = {
+            **self._active_key(owner_sub),
+            "owner_sub": _s(owner_sub),
+            "run_id": _s(run_id),
+            "expires_at": _n(active_expires_at),
+        }
         try:
             self._dynamodb.transact_write_items(
                 TransactItems=[
@@ -247,6 +279,37 @@ class AwsStorage:
                         "Put": {
                             "TableName": self._table_name,
                             "Item": idem_item,
+                            "ConditionExpression": (
+                                "attribute_not_exists(PK) OR expires_at <= :now"
+                            ),
+                            "ExpressionAttributeValues": {":now": _n(now_epoch)},
+                        }
+                    },
+                    {
+                        "Update": {
+                            "TableName": self._table_name,
+                            "Key": {
+                                "PK": _s(f"LIMIT#{utc_date.isoformat()}"),
+                                "SK": _s("COUNT"),
+                            },
+                            "UpdateExpression": (
+                                "SET #count = if_not_exists(#count, :zero) + :one"
+                            ),
+                            "ConditionExpression": (
+                                "attribute_not_exists(#count) OR #count < :limit"
+                            ),
+                            "ExpressionAttributeNames": {"#count": "count"},
+                            "ExpressionAttributeValues": {
+                                ":zero": _n(0),
+                                ":one": _n(1),
+                                ":limit": _n(self._daily_run_limit),
+                            },
+                        }
+                    },
+                    {
+                        "Put": {
+                            "TableName": self._table_name,
+                            "Item": active_item,
                             "ConditionExpression": (
                                 "attribute_not_exists(PK) OR expires_at <= :now"
                             ),
@@ -266,6 +329,27 @@ class AwsStorage:
         except Exception as error:
             if _error_code(error) not in _CONDITIONAL_CODES:
                 self._raise_provider("create run", error)
+            response = getattr(error, "response", {})
+            reasons = response.get("CancellationReasons", [])
+            if isinstance(reasons, list) and len(reasons) >= 3:
+                idempotency_reason = reasons[0]
+                daily_reason = reasons[1]
+                active_reason = reasons[2]
+                idempotency_failed = (
+                    isinstance(idempotency_reason, Mapping)
+                    and idempotency_reason.get("Code") not in {None, "None"}
+                )
+                if not idempotency_failed:
+                    if isinstance(daily_reason, Mapping) and daily_reason.get(
+                        "Code"
+                    ) not in {None, "None"}:
+                        raise DailyLimitExceeded("UTC daily run limit reached") from error
+                    if isinstance(active_reason, Mapping) and active_reason.get(
+                        "Code"
+                    ) not in {None, "None"}:
+                        raise ActiveRunConflict(
+                            "operator already has an active run"
+                        ) from error
         try:
             response = self._dynamodb.get_item(
                 TableName=self._table_name, Key=idem_key, ConsistentRead=True
@@ -303,7 +387,7 @@ class AwsStorage:
                 TableName=self._table_name,
                 Key=self._run_key(run_id),
                 UpdateExpression="SET #status = :queued",
-                ConditionExpression="#status = :pending",
+                ConditionExpression="#status = :pending AND attribute_exists(snapshot_key)",
                 ExpressionAttributeNames={"#status": "status"},
                 ExpressionAttributeValues={
                     ":pending": _s("pending_enqueue"),
@@ -524,6 +608,65 @@ class AwsStorage:
 
     def get_snapshot(self, snapshot_ref: ArtifactRef) -> dict[str, Any]:
         return self._get_artifact(snapshot_ref, "snapshots", self._snapshot_validator)
+
+    def attach_snapshot(self, run_id: str, snapshot_ref: ArtifactRef) -> RunRecord:
+        """Attach a verified snapshot reference without allowing replacement."""
+
+        self.get_snapshot(snapshot_ref)
+        reserved_run = self.get_run(run_id)
+        if reserved_run is None:
+            raise RunNotFound("run does not exist")
+        expected_snapshot_id = reserved_run.metadata.get("snapshot_id")
+        if (
+            expected_snapshot_id is not None
+            and expected_snapshot_id != snapshot_ref.artifact_id
+        ):
+            raise ConditionalWriteConflict(
+                "snapshot does not match the run's reserved snapshot_id"
+            )
+        try:
+            response = self._dynamodb.update_item(
+                TableName=self._table_name,
+                Key=self._run_key(run_id),
+                UpdateExpression=(
+                    "SET snapshot_key = :key, snapshot_sha256 = :sha256, "
+                    "snapshot_id = :snapshot_id"
+                ),
+                ConditionExpression=(
+                    "#status = :pending AND "
+                    "(attribute_not_exists(snapshot_key) OR "
+                    "(snapshot_key = :key AND snapshot_sha256 = :sha256 "
+                    "AND snapshot_id = :snapshot_id))"
+                ),
+                ExpressionAttributeNames={"#status": "status"},
+                ExpressionAttributeValues={
+                    ":pending": _s("pending_enqueue"),
+                    ":key": _s(snapshot_ref.key),
+                    ":sha256": _s(snapshot_ref.sha256),
+                    ":snapshot_id": _s(snapshot_ref.artifact_id),
+                },
+                ReturnValues="ALL_NEW",
+            )
+            attributes = response.get("Attributes")
+            if not isinstance(attributes, Mapping):
+                run = self.get_run(run_id)
+                if run is None:
+                    raise RunNotFound("run does not exist")
+                if run.snapshot_ref != snapshot_ref:
+                    raise StorageUnavailable(
+                        "snapshot attachment returned no persisted reference"
+                    )
+                return run
+            return self._decode_run(attributes)
+        except (ArtifactNotFound, RunNotFound):
+            raise
+        except Exception as error:
+            if _error_code(error) not in _CONDITIONAL_CODES:
+                self._raise_provider("attach snapshot", error)
+        run = self.get_run(run_id)
+        if run is not None and run.snapshot_ref == snapshot_ref:
+            return run
+        raise ConditionalWriteConflict("snapshot attachment is stale or contradictory")
 
     def put_report(self, report: Mapping[str, Any]) -> ArtifactRef:
         return self._put_artifact(
