@@ -352,7 +352,7 @@ class SensorMeasurement(StrictBase):
     last_observed_out_at: UtcDatetime | None = None
     estimated_out_of_range_seconds: FiniteFloat = 0.0
     unknown_duration_seconds: FiniteFloat = 0.0
-    sample_count: int = 0
+    sample_count: int = Field(default=0, ge=0)
     observed_min_c: FiniteFloat | None = None
     observed_max_c: FiniteFloat | None = None
     censored_start: bool = False
@@ -575,6 +575,25 @@ class Run(StrictBase):
     def generator_base_time(self) -> datetime | None:
         return self.base_timestamp
 
+    @model_validator(mode="after")
+    def validate_preparation_identity(self) -> Run:
+        # If any preparation identity field is provided, all three must be present
+        # to ensure atomic persistence and deterministic snapshot regeneration on retry.
+        prep_fields = [self.scenario_id, self.seed, self.base_timestamp]
+        if any(f is not None for f in prep_fields) and any(f is None for f in prep_fields):
+            missing = []
+            if self.scenario_id is None:
+                missing.append("scenario_id")
+            if self.seed is None:
+                missing.append("seed")
+            if self.base_timestamp is None:
+                missing.append("base_timestamp")
+            raise ValueError(
+                f"Preparation identity incomplete: missing {', '.join(missing)}. "
+                "scenario_id, seed, and base_timestamp must be provided together."
+            )
+        return self
+
     def to_preparation_record(self) -> PreparationRecord | None:
         if self.scenario_id and self.seed is not None and self.base_timestamp is not None:
             return PreparationRecord(
@@ -586,6 +605,10 @@ class Run(StrictBase):
                 shipment_id=self.shipment_id,
             )
         return None
+
+    @property
+    def preparation(self) -> PreparationRecord | None:
+        return self.to_preparation_record()
 
     @field_validator("stage_events")
     @classmethod

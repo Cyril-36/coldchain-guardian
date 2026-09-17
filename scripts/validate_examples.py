@@ -66,7 +66,15 @@ def validate_examples() -> int:
         expected_digest = snapshot_sha256(door_snap)
         print(f"\n  Checking door-snapshot.json integrity (sha256: {expected_digest})...")
 
-        for r_file in ("supported-report.json", "unresolved-report.json"):
+        valid_event_ids: set[str] = {r.event_id for r in door_snap.readings} | {
+            e.event_id for e in door_snap.events
+        }
+
+        for r_file in (
+            "supported-report.json",
+            "unresolved-report.json",
+            "model-unavailable-report.json",
+        ):
             report = instances.get(r_file)
             if report is not None and isinstance(report, Report):
                 if report.snapshot_id != door_snap.snapshot_id:
@@ -82,7 +90,23 @@ def validate_examples() -> int:
                 if not report.evidence:
                     errors.append(f"{r_file} must contain at least one evidence item")
                 else:
-                    print(f"  [OK] {r_file} digest matches door-snapshot and includes {len(report.evidence)} evidence items")
+                    invalid_record_ids = [
+                        (ev.evidence_id, rec_id)
+                        for ev in report.evidence
+                        for rec_id in ev.record_ids
+                        if rec_id not in valid_event_ids
+                    ]
+                    if invalid_record_ids:
+                        for ev_id, rec_id in invalid_record_ids:
+                            errors.append(
+                                f"{r_file} evidence '{ev_id}' cites record_id '{rec_id}' "
+                                f"not found in door-snapshot.json"
+                            )
+                    else:
+                        print(
+                            f"  [OK] {r_file} digest matches door-snapshot and includes "
+                            f"{len(report.evidence)} evidence items with valid snapshot record_ids"
+                        )
 
     if errors:
         print("\nValidation Errors:", file=sys.stderr)

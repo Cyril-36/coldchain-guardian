@@ -421,6 +421,15 @@ def test_sensor_measurement_no_role_attribute() -> None:
         })
 
 
+def test_sensor_measurement_rejects_negative_sample_count() -> None:
+    """SensorMeasurement must reject negative sample_count values (ge=0)."""
+    with pytest.raises(ValidationError, match="greater than or equal to 0"):
+        SensorMeasurement(
+            sensor_id="55555555-5555-4555-8555-555555555555",
+            sample_count=-1,
+        )
+
+
 # ── Review & Run Model Tests ────────────────────────────────────────────────
 
 
@@ -525,6 +534,8 @@ def test_run_serializes_wire_fields_and_excludes_storage_internals() -> None:
         created_at="2026-09-17T10:00:00Z",
         owner_sub="operator-sub-123",
         scenario_id="scenario-001",
+        seed=42,
+        base_timestamp="2026-09-17T10:00:00Z",
         attempt_id="attempt-001",
         snapshot_ref=ArtifactRef(
             key="snapshots/snap.json",
@@ -537,6 +548,8 @@ def test_run_serializes_wire_fields_and_excludes_storage_internals() -> None:
     assert dumped["snapshot_id"] == "33333333-3333-4333-8333-333333333333"
     assert "owner_sub" not in dumped
     assert "scenario_id" not in dumped
+    assert "seed" not in dumped
+    assert "base_timestamp" not in dumped
     assert "attempt_id" not in dumped
     assert "snapshot_ref" not in dumped
     assert "report_ref" not in dumped
@@ -883,6 +896,40 @@ def test_run_persists_seed_and_base_timestamp_excluded_from_wire() -> None:
     assert prep.seed == 101
     assert prep.scenario_id == "door_exposure"
     assert prep.base_timestamp == base_time
+    assert run.preparation == prep
+
+
+def test_run_rejects_incomplete_preparation_identity() -> None:
+    """Run must reject partial preparation identity fields to ensure atomic resume."""
+    base_time = datetime(2026, 9, 17, 8, 0, tzinfo=UTC)
+    # Missing base_timestamp
+    with pytest.raises(ValidationError, match="Preparation identity incomplete"):
+        Run(
+            run_id="00000000-0000-4000-8000-000000000001",
+            status=RunStatus.queued,
+            stage=PublicStage.preparing,
+            created_at=base_time,
+            shipment_id="00000000-0000-4000-8000-000000000002",
+            snapshot_id="00000000-0000-4000-8000-000000000003",
+            scenario_id="door_exposure",
+            seed=101,
+            # base_timestamp omitted
+        )
+
+    # Missing scenario_id
+    with pytest.raises(ValidationError, match="Preparation identity incomplete"):
+        Run(
+            run_id="00000000-0000-4000-8000-000000000001",
+            status=RunStatus.queued,
+            stage=PublicStage.preparing,
+            created_at=base_time,
+            shipment_id="00000000-0000-4000-8000-000000000002",
+            snapshot_id="00000000-0000-4000-8000-000000000003",
+            seed=101,
+            base_timestamp=base_time,
+            # scenario_id omitted
+        )
+
 
 
 

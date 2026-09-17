@@ -265,6 +265,7 @@
         },
         "sample_count": {
           "default": 0,
+          "minimum": 0,
           "title": "Sample Count",
           "type": "integer"
         },

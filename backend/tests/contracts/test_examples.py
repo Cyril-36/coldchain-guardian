@@ -148,3 +148,49 @@ def test_example_cross_reference_integrity() -> None:
     assert unresolved_report.snapshot_id == snapshot.snapshot_id
     assert unresolved_report.snapshot_sha256 == expected_sha
     assert len(unresolved_report.evidence) > 0
+
+
+def test_evidence_record_ids_exist_in_frozen_snapshot() -> None:
+    """Verify all evidence items in example reports cite real events from door-snapshot.json."""
+    snapshot_data = _load_json("door-snapshot.json")
+    snapshot = Snapshot.model_validate(snapshot_data)
+    valid_record_ids = {r.event_id for r in snapshot.readings} | {
+        e.event_id for e in snapshot.events
+    }
+
+    report_files = (
+        "supported-report.json",
+        "unresolved-report.json",
+        "model-unavailable-report.json",
+    )
+    for r_file in report_files:
+        report = Report.model_validate(_load_json(r_file))
+        assert report.evidence, f"{r_file} must have evidence"
+        for ev in report.evidence:
+            for rec_id in ev.record_ids:
+                assert rec_id in valid_record_ids, (
+                    f"{r_file} evidence {ev.evidence_id} cites non-existent record_id {rec_id}"
+                )
+
+
+def test_cross_check_detects_unknown_record_id() -> None:
+    """Demonstrate that citing an unknown record_id is caught and flagged."""
+    snapshot_data = _load_json("door-snapshot.json")
+    snapshot = Snapshot.model_validate(snapshot_data)
+    valid_record_ids = {r.event_id for r in snapshot.readings} | {
+        e.event_id for e in snapshot.events
+    }
+
+    report_data = _load_json("supported-report.json")
+    # Tamper with an evidence record_id to an unknown UUID
+    fake_record_id = "ffffffff-ffff-4fff-bfff-ffffffffffff"
+    report_data["evidence"][0]["record_ids"].append(fake_record_id)
+
+    tampered_report = Report.model_validate(report_data)
+    cited_ids = {
+        rec_id
+        for ev in tampered_report.evidence
+        for rec_id in ev.record_ids
+    }
+    unknown_ids = cited_ids - valid_record_ids
+    assert fake_record_id in unknown_ids
