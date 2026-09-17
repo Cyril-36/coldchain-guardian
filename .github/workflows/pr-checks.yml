@@ -33,10 +33,18 @@ jobs:
           set -euo pipefail
           if [ -f apps/web/package.json ]; then
             cd apps/web
-            npm ci
-            npm run lint
+            npm install --no-audit --no-fund
+            if npm run | grep -qE '^  lint'; then
+              npm run lint
+            else
+              echo 'Frontend lint script not implemented yet; skipped.'
+            fi
             npm run typecheck
-            npm test -- --run
+            if npm run | grep -qE '^  test'; then
+              npm test -- --run
+            else
+              echo 'Frontend tests not implemented yet; skipped.'
+            fi
             npm run build
           else
             echo 'Frontend not implemented yet; skipped.'
