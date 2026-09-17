@@ -124,3 +124,150 @@ export const demoReport: Report = {
     { evidence_id: GAP_EVIDENCE, snapshot_id: demoSnapshot.snapshot_id, kind: "event", record_ids: [GAP_EVENT], observed_at: "2026-09-17T12:40:00Z", summary: "Telemetry gap recorded after the excursion." },
   ],
 };
+
+export interface MockCase {
+  id: string;
+  label: string;
+  run: Run;
+  snapshot: Snapshot;
+  report: Report;
+}
+
+export const unresolvedCase: MockCase = {
+  id: "unresolved",
+  label: "Unresolved investigation · Run 1043",
+  run: {
+    ...demoRun,
+    run_id: "00000000-0000-0000-0000-000000001043",
+    status: "needs_review",
+    report_summary: { outcome: "unresolved", primary_hypothesis: null, review_required: true },
+  },
+  snapshot: demoSnapshot,
+  report: {
+    ...demoReport,
+    run_id: "00000000-0000-0000-0000-000000001043",
+    outcome: "unresolved",
+    primary_hypothesis: null,
+    hypotheses: [
+      {
+        hypothesis: "refrigeration_problem",
+        assessment: "insufficient",
+        supporting_evidence_ids: [PEAK_EVIDENCE],
+        conflicting_evidence_ids: [],
+        missing_evidence: ["Refrigeration power telemetry for the excursion interval", "Compressor operational logs"],
+        explanation: "Temperature rose gradually but refrigeration telemetry is missing to confirm compressor failure.",
+      },
+    ],
+    next_checks: [
+      { code: "request_missing_logs", reason: "Retrieve fleet gateway refrigeration telemetry", related_evidence_ids: [] },
+      { code: "check_refrigeration", reason: "Inspect transport refrigeration unit diagnostics", related_evidence_ids: [] },
+    ],
+    limitations: ["Missing refrigeration operational logs prevent root cause determination."],
+  },
+};
+
+export const modelUnavailableCase: MockCase = {
+  id: "model_unavailable",
+  label: "Model unavailable fallback · Run 1044",
+  run: {
+    ...demoRun,
+    run_id: "00000000-0000-0000-0000-000000001044",
+    generation_mode: "deterministic_only",
+  },
+  snapshot: demoSnapshot,
+  report: {
+    ...demoReport,
+    run_id: "00000000-0000-0000-0000-000000001044",
+    generation_mode: "deterministic_only",
+    model_id: null,
+    limitations: [
+      "AI reasoning service was unavailable; deterministic measurements provided with rule-based checks.",
+      ...demoReport.limitations,
+    ],
+  },
+};
+
+export const noExcursionCase: MockCase = {
+  id: "no_excursion",
+  label: "Normal control (No excursion) · Run 1045",
+  run: {
+    ...demoRun,
+    run_id: "00000000-0000-0000-0000-000000001045",
+    status: "completed",
+    report_summary: { outcome: "no_excursion", primary_hypothesis: null, review_required: false },
+  },
+  snapshot: {
+    ...demoSnapshot,
+    readings: demoSnapshot.readings.map((r) => ({
+      ...r,
+      temperature_c: Number((4.8 + Math.sin(Date.parse(r.observed_at) / 100000) * 0.4).toFixed(1)),
+    })),
+    events: [],
+  },
+  report: {
+    ...demoReport,
+    run_id: "00000000-0000-0000-0000-000000001045",
+    outcome: "no_excursion",
+    primary_hypothesis: null,
+    review_required: false,
+    measurements: [
+      {
+        ...demoReport.measurements[0],
+        first_observed_out_at: null,
+        last_observed_out_at: null,
+        estimated_out_of_range_seconds: 0,
+        observed_max_c: 5.2,
+        observed_min_c: 4.4,
+        evidence_ids: [],
+      },
+    ],
+    hypotheses: [],
+    next_checks: [],
+    limitations: ["No detected excursions in this snapshot."],
+    evidence: [],
+  },
+};
+
+export const sensorDisagreementCase: MockCase = {
+  id: "sensor_disagreement",
+  label: "Sensor disagreement · Run 1046",
+  run: {
+    ...demoRun,
+    run_id: "00000000-0000-0000-0000-000000001046",
+    report_summary: { outcome: "hypothesis_supported", primary_hypothesis: "sensor_disagreement", review_required: true },
+  },
+  snapshot: demoSnapshot,
+  report: {
+    ...demoReport,
+    run_id: "00000000-0000-0000-0000-000000001046",
+    primary_hypothesis: "sensor_disagreement",
+    hypotheses: [
+      {
+        hypothesis: "sensor_disagreement",
+        assessment: "supported",
+        supporting_evidence_ids: [PEAK_EVIDENCE],
+        conflicting_evidence_ids: [],
+        missing_evidence: [],
+        explanation: "Comparison sensor diverged significantly from the reference sensor during the observation window.",
+      },
+    ],
+    next_checks: [
+      { code: "verify_sensor", reason: "Calibrate reference and comparison probes against secondary reference", related_evidence_ids: [PEAK_EVIDENCE] },
+    ],
+  },
+};
+
+export const mockCases: Record<string, MockCase> = {
+  door: {
+    id: "door",
+    label: "Door exposure · Run 1042",
+    run: demoRun,
+    snapshot: demoSnapshot,
+    report: demoReport,
+  },
+  unresolved: unresolvedCase,
+  model_unavailable: modelUnavailableCase,
+  no_excursion: noExcursionCase,
+  sensor_disagreement: sensorDisagreementCase,
+};
+

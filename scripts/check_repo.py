@@ -17,7 +17,7 @@ for relative in required:
         issues.append(f"Missing required file: {relative}")
 
 for path in root.rglob("*.md"):
-    if ".git" in path.parts:
+    if ".git" in path.parts or "node_modules" in path.parts:
         continue
     content = path.read_text(encoding="utf-8")
     if content.count("```") % 2:

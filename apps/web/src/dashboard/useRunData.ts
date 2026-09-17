@@ -2,38 +2,86 @@ import { useEffect, useState } from "react";
 import { ApiClient } from "../api/client";
 import { ApiClientError } from "../api/errors";
 import { createApiEndpoints } from "../api/endpoints";
-import type { Report, Run, Snapshot } from "../types/contracts";
+import type { DemoRunSummary, Report, Run, Snapshot } from "../types/contracts";
 import { useAuth } from "../auth/AuthProvider";
-import { demoReport, demoRun, demoSnapshot } from "./mockData";
+import { demoReport, demoRun, demoSnapshot, mockCases } from "./mockData";
 
-interface RunData {
-  run: Run; snapshot: Snapshot; report: Report; source: "api" | "fixture"; protectedRun: boolean;
-  snapshotReady: boolean; reportReady: boolean; loading: boolean; error: Error | null; retry: () => void;
+export interface RunData {
+  run: Run;
+  snapshot: Snapshot;
+  report: Report;
+  source: "api" | "fixture";
+  protectedRun: boolean;
+  snapshotReady: boolean;
+  reportReady: boolean;
+  loading: boolean;
+  error: Error | null;
+  retry: () => void;
+  demoRuns: DemoRunSummary[];
+  selectedDemoId: string | null;
 }
 const ACTIVE_POLL_MS = 2_000;
 const BACKOFF_POLL_MS = 5_000;
 const BACKOFF_AFTER_MS = 30_000;
 function getRunIdFromUrl() { return new URLSearchParams(window.location.search).get("run_id"); }
 function getDemoRunIdFromUrl() { return new URLSearchParams(window.location.search).get("demo_run_id"); }
+function getCaseIdFromUrl() { return new URLSearchParams(window.location.search).get("case"); }
 function isTerminal(status: Run["status"]) { return status === "completed" || status === "needs_review" || status === "failed"; }
 function shouldRetry(error: unknown) { return error instanceof ApiClientError ? error.retryable : true; }
+
+const fixtureDemoSummaries: DemoRunSummary[] = Object.values(mockCases).map((c) => ({
+  ...c.run,
+  is_public_demo: true as const,
+  label: c.label,
+}));
 
 export function useRunData(): RunData {
   const auth = useAuth();
   const [retryNonce, setRetryNonce] = useState(0);
   const retry = () => setRetryNonce((value) => value + 1);
-  const [data, setData] = useState<RunData>({ run: demoRun, snapshot: demoSnapshot, report: demoReport, source: "fixture", protectedRun: false, snapshotReady: true, reportReady: true, loading: false, error: null, retry });
+
+  const initialCaseId = getCaseIdFromUrl() ?? "door";
+  const initialFixture = mockCases[initialCaseId] ?? mockCases.door;
+
+  const [data, setData] = useState<RunData>({
+    run: initialFixture.run,
+    snapshot: initialFixture.snapshot,
+    report: initialFixture.report,
+    source: "fixture",
+    protectedRun: false,
+    snapshotReady: true,
+    reportReady: true,
+    loading: false,
+    error: null,
+    retry,
+    demoRuns: fixtureDemoSummaries,
+    selectedDemoId: initialFixture.id,
+  });
 
   useEffect(() => {
     const baseUrl = import.meta.env.VITE_API_BASE_URL;
     const runId = getRunIdFromUrl();
     const demoRunId = getDemoRunIdFromUrl();
+    const caseId = getCaseIdFromUrl();
 
     if (!baseUrl) {
       if (import.meta.env.PROD) {
         setData((current) => ({ ...current, protectedRun: false, source: "api", loading: false, snapshotReady: false, reportReady: false, error: new Error("API base URL is not configured"), retry }));
       } else if (!runId && !demoRunId) {
-        setData((current) => ({ ...current, protectedRun: false, source: "fixture", loading: false, error: null, retry }));
+        const fixtureCase = mockCases[caseId ?? "door"] ?? mockCases.door;
+        setData((current) => ({
+          ...current,
+          run: fixtureCase.run,
+          snapshot: fixtureCase.snapshot,
+          report: fixtureCase.report,
+          protectedRun: false,
+          source: "fixture",
+          loading: false,
+          error: null,
+          demoRuns: fixtureDemoSummaries,
+          selectedDemoId: fixtureCase.id,
+          retry,
+        }));
       }
       return;
     }
@@ -86,6 +134,7 @@ export function useRunData(): RunData {
         const selected = demoRunId ? demos.find((item) => item.run_id === demoRunId) : demos[0];
         if (!selected) throw new Error("No public demo runs are available");
         const run = await api.getDemoRun(selected.run_id); if (cancelled) return;
+        setData((current) => ({ ...current, demoRuns: demos, selectedDemoId: selected.run_id }));
         await hydrateArtifacts(run, false);
       } catch (error: unknown) {
         if (!cancelled) setData((current) => ({ ...current, source: "api", protectedRun: false, snapshotReady: false, reportReady: false, loading: false, error: error instanceof Error ? error : new Error("Unable to load public demo") , retry }));
