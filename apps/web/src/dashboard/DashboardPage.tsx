@@ -3,6 +3,7 @@ import { demoReport, demoRun, demoSnapshot } from "./mockData";
 import { TelemetryChart } from "./TelemetryChart";
 import { useRunData } from "./useRunData";
 import { useOperatorActions } from "./useOperatorActions";
+import { useAuth } from "../auth/AuthProvider";
 import type { Report, Snapshot, ReviewDecision } from "../types/contracts";
 
 const stageLabels: Record<string, string> = { preparing: "Preparing", detecting: "Detecting", collecting_evidence: "Collecting evidence", comparing_hypotheses: "Comparing hypotheses", verifying: "Verifying", ready: "Ready", failed: "Failed" };
@@ -14,6 +15,7 @@ function outcomeCopy(report: Report) { if (report.outcome === "no_excursion") re
 function fixtureEvidence(snapshot: Snapshot): FixtureEvidenceItem[] { const door = snapshot.events.find((event) => event.event_type === "door_state"); const gap = snapshot.events.find((event) => event.value.includes("telemetry gap")); const reference = snapshot.sensors.find((sensor) => sensor.role === "reference"); const comparison = snapshot.sensors.find((sensor) => sensor.role === "comparison"); const peak = snapshot.readings.find((reading) => reading.sensor_id === reference?.sensor_id && reading.temperature_c > snapshot.policy.max_c); const comparisonReading = snapshot.readings.find((reading) => reading.sensor_id === comparison?.sensor_id); return [door && { key: door.event_id, title: "Door event", detail: `${formatTime(door.observed_at)} UTC · ${door.value}`, tone: "green" as const, recordIds: [door.event_id] }, peak && { key: peak.event_id, title: "Temperature peak", detail: `${peak.temperature_c}°C · Sensor A`, tone: "green" as const, recordIds: [peak.event_id] }, comparisonReading && { key: comparisonReading.event_id, title: "Sensor B", detail: `${comparisonReading.temperature_c}°C · comparison`, tone: "amber" as const, recordIds: [comparisonReading.event_id] }, gap && { key: gap.event_id, title: "Data gap", detail: `${formatTime(gap.observed_at)} UTC · ${gap.value}`, tone: "amber" as const, recordIds: [gap.event_id] }].filter((item): item is FixtureEvidenceItem => Boolean(item)); }
 
 export function DashboardPage() {
+  const auth = useAuth();
   const live = useRunData();
   const runId = live.source === "api" ? live.run.run_id : null;
   const actions = useOperatorActions(runId);
@@ -36,27 +38,24 @@ export function DashboardPage() {
   const isReportReady = isLive ? (live.run.status === "completed" || live.run.status === "needs_review") && live.snapshotReady && live.reportReady : true;
   const currentReview = actions.review ?? run.review;
 
+  const handleRun = async () => {
+    if (!auth.authenticated) { await auth.signIn(); return; }
+    try { await actions.createRun(); } catch { /* hook exposes the server/configuration error */ }
+  };
   const handleReview = async (decision: ReviewDecision) => {
     if (!isLive || !reviewNote.trim() || actions.reviewSubmitting) return;
     setReviewDecision(null);
-    try {
-      await actions.submitReview({ decision, note: reviewNote.trim(), report_id: report.report_id });
-      setReviewDecision(decision);
-    } catch {
-      // The action hook exposes the server error; keep the note for a retry.
-    }
+    try { await actions.submitReview({ decision, note: reviewNote.trim(), report_id: report.report_id }); setReviewDecision(decision); }
+    catch { /* action hook exposes the server error; keep note for retry */ }
   };
-
-  const handleDownload = async () => {
-    if (!isLive) return;
-    try { await actions.downloadReport(); } catch { /* error is rendered below */ }
-  };
+  const handleDownload = async () => { if (!isLive) return; try { await actions.downloadReport(); } catch { /* error is rendered below */ } };
 
   return <main className="min-h-screen bg-slate-50 text-slate-950"><div className="mx-auto max-w-[1440px] p-5 lg:p-8">
     {live.source === "fixture" && <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-xs font-medium text-amber-800">Demo fixture mode — no live backend data is being shown.</div>}
     {live.error && <div role="alert" className="mb-3 flex items-center gap-3 rounded-md border border-red-200 bg-red-50 px-4 py-2 text-xs font-medium text-red-800"><span className="flex-1">Live run refresh failed: {live.error.message}</span><button type="button" onClick={live.retry} className="rounded border border-red-200 bg-white px-2 py-1 font-semibold text-red-800">Retry</button></div>}
     {actions.error && <div role="alert" className="mb-3 rounded-md border border-red-200 bg-red-50 px-4 py-2 text-xs font-medium text-red-800">{actions.error.message}</div>}
-    <header className="flex flex-wrap items-center gap-4 rounded-[10px] border border-slate-200 bg-white px-6 py-4 shadow-sm"><div className="min-w-[240px] flex-1"><h1 className="text-xl font-semibold">ColdChain Guardian</h1><p className="text-xs text-slate-400">Simulated shipment · AWS-backed processing</p></div><label className="text-xs font-semibold text-slate-600">Demo case<select defaultValue="door" className="ml-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-normal text-slate-950"><option value="door">Door exposure · Run 1042</option></select></label><button type="button" className="rounded-md bg-[#123B5D] px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#0F304C]">Run investigation</button><div className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-50 text-xs font-semibold text-[#123B5D]">NG</div></header>
+    {auth.error && <div role="alert" className="mb-3 rounded-md border border-red-200 bg-red-50 px-4 py-2 text-xs font-medium text-red-800">{auth.error.message}</div>}
+    <header className="flex flex-wrap items-center gap-4 rounded-[10px] border border-slate-200 bg-white px-6 py-4 shadow-sm"><div className="min-w-[240px] flex-1"><h1 className="text-xl font-semibold">ColdChain Guardian</h1><p className="text-xs text-slate-400">Simulated shipment · AWS-backed processing</p></div><label className="text-xs font-semibold text-slate-600">Demo case<select defaultValue="door" className="ml-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-normal text-slate-950"><option value="door">Door exposure · Run 1042</option></select></label><button type="button" onClick={() => void handleRun()} disabled={auth.loading || actions.reviewSubmitting} className="rounded-md bg-[#123B5D] px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#0F304C] disabled:cursor-not-allowed disabled:opacity-60">{auth.loading ? "Checking session…" : "Run investigation"}</button><div className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-50 text-xs font-semibold text-[#123B5D]">NG</div></header>
     <div className="flex flex-wrap gap-x-6 gap-y-2 px-1 py-3 text-xs"><span className="font-semibold text-slate-600">Shipment {run.shipment_id.slice(-8)}</span><span className="text-slate-600">Policy {snapshot.policy.policy_id}-{snapshot.policy.policy_version} · {snapshot.policy.min_c}°C–{snapshot.policy.max_c}°C</span><span className="text-slate-400">Cutoff {new Date(snapshot.cutoff_at).toLocaleDateString("en-GB")} · {formatTime(snapshot.cutoff_at)} UTC</span><span className="rounded px-2 py-1 font-semibold text-amber-700 bg-amber-50">SIMULATED</span></div>
     <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4"><MetricCard label="Observed peak" value={primaryMeasurement?.observed_max_c == null ? "—" : `${primaryMeasurement.observed_max_c}°C`} detail={primaryMeasurement?.observed_max_c != null && primaryMeasurement.observed_max_c > snapshot.policy.max_c ? "Above configured limit" : "Within configured limit"} tone={primaryMeasurement?.observed_max_c != null && primaryMeasurement.observed_max_c > snapshot.policy.max_c ? "critical" : "info"} /><MetricCard label="Estimated time out of range" value={formatDuration(primaryMeasurement?.estimated_out_of_range_seconds ?? null)} detail={primaryMeasurement?.censored_start || primaryMeasurement?.censored_end ? "Censored at window edge" : "Backend measurement"} tone="review" /><MetricCard label="Data coverage" value={primaryMeasurement?.coverage_status ?? "—"} detail={primaryMeasurement?.unknown_duration_seconds ? `${formatDuration(primaryMeasurement.unknown_duration_seconds)} unknown` : "No unknown duration reported"} tone="info" /><MetricCard label="Review status" value={currentReview ? `Reviewed · ${currentReview.decision === "acknowledged" ? "Acknowledged" : "More evidence requested"}` : report.review_required ? "Needs review" : "No review required"} detail={report.verification.status === "passed" ? "Evidence references checked" : "Verification blocked"} tone={report.review_required && !currentReview ? "review" : "info"} /></section>
     <section className="mt-3"><TelemetryChart snapshot={snapshot} highlightedRecordIds={selectedRecordIds} onRecordSelect={(ids) => setSelectedRecordIds(new Set(ids))} /></section>
