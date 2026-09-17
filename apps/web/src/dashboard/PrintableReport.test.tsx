@@ -14,5 +14,6 @@ describe("PrintableReport", () => {
     expect(text).toContain("Evidence");
     expect(text).toContain("Next checks");
     expect(text).toContain("Limitations & verification");
+    expect(text).toContain("Operator review");
   });
 });
