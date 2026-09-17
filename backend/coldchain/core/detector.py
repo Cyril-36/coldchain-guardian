@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 from coldchain.contracts.enums import CoverageStatus, EvidenceKind
 from coldchain.contracts.schemas import (
@@ -113,38 +113,45 @@ def validate_snapshot(snapshot: Snapshot) -> Snapshot:
 
     Returns a new Snapshot with cleaned data.
     """
-    # ── Deduplicate readings ────────────────────────────────────────────
-    seen_readings: dict[str, Reading] = {}
+    # ── Deduplicate readings and events ─────────────────────────────────
+    seen: dict[str, tuple[str, dict[str, Any]]] = {}
+    deduped_readings: list[Reading] = []
     for r in snapshot.readings:
-        if r.event_id in seen_readings:
-            existing = seen_readings[r.event_id]
-            if existing != r:
+        serialized_reading = r.model_dump(mode="json")
+        if r.event_id in seen:
+            kind, prior = seen[r.event_id]
+            if kind != "reading" or prior != serialized_reading:
                 raise ValueError(
                     f"Conflicting duplicate reading for event_id {r.event_id}"
                 )
             # identical duplicate — skip
         else:
-            seen_readings[r.event_id] = r
+            seen[r.event_id] = ("reading", serialized_reading)
+            deduped_readings.append(r)
 
-    deduped_readings = sorted(seen_readings.values(), key=_reading_sort_key)
+    deduped_readings.sort(key=_reading_sort_key)
 
-    # ── Deduplicate events ──────────────────────────────────────────────
-    seen_events: dict[str, Event] = {}
+    deduped_events: list[Event] = []
     for e in snapshot.events:
-        if e.event_id in seen_events:
-            existing = seen_events[e.event_id]
-            if existing != e:
+        serialized_event = e.model_dump(mode="json")
+        if e.event_id in seen:
+            kind, prior = seen[e.event_id]
+            if kind != "event" or prior != serialized_event:
                 raise ValueError(
                     f"Conflicting duplicate event for event_id {e.event_id}"
                 )
             # identical duplicate — skip
         else:
-            seen_events[e.event_id] = e
+            seen[e.event_id] = ("event", serialized_event)
+            deduped_events.append(e)
 
-    sorted_events = sorted(seen_events.values(), key=lambda e: (e.observed_at, e.event_id))
+    deduped_events.sort(key=lambda e: (e.observed_at, e.event_id))
 
     return snapshot.model_copy(
-        update={"readings": deduped_readings, "events": sorted_events},
+        update={
+            "readings": deduped_readings,
+            "events": deduped_events,
+        },
     )
 
 
@@ -172,6 +179,9 @@ def detect_excursions(
     for sensor in snapshot.sensors:
         sid = sensor.sensor_id
         readings = sorted(readings_by_sensor.get(sid, []), key=_reading_sort_key)
+        evidence_id = str(
+            uuid.uuid5(uuid.UUID(snapshot.snapshot_id), f"measurement:{sid}")
+        )
 
         if not readings:
             measurements.append(
@@ -179,6 +189,7 @@ def detect_excursions(
                     sensor_id=sid,
                     sample_count=0,
                     coverage_status=CoverageStatus.insufficient,
+                    evidence_ids=[evidence_id],
                 )
             )
             continue

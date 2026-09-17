@@ -581,6 +581,9 @@ def test_sensor_with_no_readings():
     assert res.has_excursion is False
     assert res.needs_review is True
     assert res.reason == "insufficient_coverage"
+    assert cmp_m.evidence_ids == [
+        str(uuid5(UUID(snap.snapshot_id), f"measurement:{cmp_m.sensor_id}"))
+    ]
 
 
 def test_sensor_with_single_reading():
