@@ -1,0 +1,597 @@
+{
+  "snapshot_id": "4a72d8e0-1c3b-4e9f-9a2d-8f1e6b3c5a01",
+  "shipment_id": "8f2b4c6e-9d1a-4f3e-b5c7-1a3e5a7b9c02",
+  "schema_version": "1.0",
+  "source": "simulated",
+  "cutoff_at": "2026-09-17T10:45:00Z",
+  "policy": {
+    "policy_id": "f3c2b1a0-9e8d-4c7b-a6f5-2d1e0f9a8b7c",
+    "policy_version": "1.0",
+    "min_c": 2.0,
+    "max_c": 8.0,
+    "expected_interval_seconds": 60.0,
+    "max_gap_seconds": 120.0
+  },
+  "sensors": [
+    {
+      "sensor_id": "sensor-ref-001",
+      "placement": "cargo_bay_door",
+      "role": "reference"
+    },
+    {
+      "sensor_id": "sensor-cmp-001",
+      "placement": "cargo_bay_interior",
+      "role": "comparison"
+    }
+  ],
+  "readings": [
+    {
+      "event_id": "6aec2888-5c90-5312-8dc8-8fb9c1cde283",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:00:00Z",
+      "temperature_c": 4.5
+    },
+    {
+      "event_id": "f08c749b-f347-5dff-a480-e199f3af4694",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:00:00Z",
+      "temperature_c": 4.2
+    },
+    {
+      "event_id": "f9c103c8-802c-5cd8-9202-70a49362b9b7",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:01:00Z",
+      "temperature_c": 4.48
+    },
+    {
+      "event_id": "3d454f69-a388-5a0c-8877-0b2f37e52a15",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:01:00Z",
+      "temperature_c": 4.18
+    },
+    {
+      "event_id": "fde88bfe-acee-5779-ba65-d1461cf96a09",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:02:00Z",
+      "temperature_c": 4.52
+    },
+    {
+      "event_id": "bfcf439d-f77f-5420-940f-68026362b309",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:02:00Z",
+      "temperature_c": 4.22
+    },
+    {
+      "event_id": "4c04bda3-b1c1-54e3-84e9-6f2843c7c306",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:03:00Z",
+      "temperature_c": 4.5
+    },
+    {
+      "event_id": "2f364fa3-7a0e-56f2-b168-12ec7e35a5da",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:03:00Z",
+      "temperature_c": 4.2
+    },
+    {
+      "event_id": "54f414d4-f199-5deb-85e2-5b159cfda985",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:04:00Z",
+      "temperature_c": 4.49
+    },
+    {
+      "event_id": "eddb9595-2358-5c9c-83e2-7f05ea4ef950",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:04:00Z",
+      "temperature_c": 4.19
+    },
+    {
+      "event_id": "21ed384b-a267-5454-b39f-07e7b7ed17c1",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:05:00Z",
+      "temperature_c": 4.51
+    },
+    {
+      "event_id": "d256bdd5-f4a6-567e-b66f-b6343524d1c7",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:05:00Z",
+      "temperature_c": 4.21
+    },
+    {
+      "event_id": "852858ac-8204-5286-8656-3d5fb500c750",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:06:00Z",
+      "temperature_c": 4.5
+    },
+    {
+      "event_id": "b9d36855-2803-56e8-b13a-60916130cbc4",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:06:00Z",
+      "temperature_c": 4.2
+    },
+    {
+      "event_id": "b2564365-8682-5848-8ed6-b5e52dc13820",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:07:00Z",
+      "temperature_c": 4.48
+    },
+    {
+      "event_id": "4af0454f-0c01-5284-a39e-8a25c269bcec",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:07:00Z",
+      "temperature_c": 4.18
+    },
+    {
+      "event_id": "5c315eda-9b5f-59cd-acee-2846aa6f9178",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:08:00Z",
+      "temperature_c": 4.52
+    },
+    {
+      "event_id": "5bc9012a-ee72-5b58-ad5e-9803bc39ba39",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:08:00Z",
+      "temperature_c": 4.22
+    },
+    {
+      "event_id": "5b026a1d-6148-5bfb-b1a0-2590e950c0a8",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:09:00Z",
+      "temperature_c": 4.5
+    },
+    {
+      "event_id": "18f7efeb-3649-5ef4-8e84-11f28d2f1b66",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:09:00Z",
+      "temperature_c": 4.2
+    },
+    {
+      "event_id": "06300737-8f53-585d-acac-ddada29a5a6f",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:10:00Z",
+      "temperature_c": 4.6
+    },
+    {
+      "event_id": "57381f19-11f4-5143-a4ff-f6ea5d87ef32",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:10:00Z",
+      "temperature_c": 4.2
+    },
+    {
+      "event_id": "a5a43319-15da-53a2-ab37-3d8d8e778156",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:11:00Z",
+      "temperature_c": 5.2
+    },
+    {
+      "event_id": "6d68b822-d393-5f14-b51b-fec7777ce726",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:11:00Z",
+      "temperature_c": 4.25
+    },
+    {
+      "event_id": "0619e700-4b24-56fa-acd1-65eea5e3e62a",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:12:00Z",
+      "temperature_c": 5.8
+    },
+    {
+      "event_id": "cf609af2-28b4-5fc4-8d4c-2cb7f9d22a25",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:12:00Z",
+      "temperature_c": 4.4
+    },
+    {
+      "event_id": "fa64cf05-6e6b-5926-a80c-945bb12ad6f0",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:13:00Z",
+      "temperature_c": 6.5
+    },
+    {
+      "event_id": "70f48a71-4cae-5fc6-8379-c4380af1089b",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:13:00Z",
+      "temperature_c": 4.65
+    },
+    {
+      "event_id": "65d5ff8f-49f8-5ea6-ad31-c7135c889baf",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:14:00Z",
+      "temperature_c": 7.5
+    },
+    {
+      "event_id": "0bf3f337-eb7d-58f5-a0a2-ecb62e66c543",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:14:00Z",
+      "temperature_c": 4.95
+    },
+    {
+      "event_id": "b54ce4fc-70c8-53cb-b49f-76c4ca13373d",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:15:00Z",
+      "temperature_c": 8.5
+    },
+    {
+      "event_id": "bcb9181c-8cd5-5764-97dd-f0498af00e6f",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:15:00Z",
+      "temperature_c": 5.3
+    },
+    {
+      "event_id": "dce37faa-646f-5cb0-be75-4bb1a6d764be",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:16:00Z",
+      "temperature_c": 9.3
+    },
+    {
+      "event_id": "20b952a3-e76f-5ee2-ab7e-aa10af7186bd",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:16:00Z",
+      "temperature_c": 5.7
+    },
+    {
+      "event_id": "cc10f0ac-c1fe-52b3-aada-5994ffd1eca5",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:17:00Z",
+      "temperature_c": 10.0
+    },
+    {
+      "event_id": "e9e8b354-efed-5afc-aa65-e92796e8f20c",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:17:00Z",
+      "temperature_c": 6.1
+    },
+    {
+      "event_id": "8cecd506-9843-5589-b68a-a796a32fc575",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:18:00Z",
+      "temperature_c": 10.6
+    },
+    {
+      "event_id": "eedf9c20-a10a-5ecd-b5de-f74103d4941d",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:18:00Z",
+      "temperature_c": 6.45
+    },
+    {
+      "event_id": "c07fa505-b234-51b9-92da-6290ec4c6e4f",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:19:00Z",
+      "temperature_c": 11.0
+    },
+    {
+      "event_id": "f79e1cdd-8929-57e4-8d74-8b956a52aef5",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:19:00Z",
+      "temperature_c": 6.75
+    },
+    {
+      "event_id": "e681c809-2c54-52c6-ba55-c23e4c836535",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:20:00Z",
+      "temperature_c": 11.2
+    },
+    {
+      "event_id": "eb1c4df0-f7a0-5c84-869c-330ebbf282a3",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:20:00Z",
+      "temperature_c": 6.85
+    },
+    {
+      "event_id": "9139303c-16cc-53e4-9ee5-786f2a16ff74",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:21:00Z",
+      "temperature_c": 10.5
+    },
+    {
+      "event_id": "41e829ef-3cc7-5af7-bbe3-45ce4e474af7",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:21:00Z",
+      "temperature_c": 6.7
+    },
+    {
+      "event_id": "a7affb17-7a75-5f26-aeeb-88ba6d8362b1",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:22:00Z",
+      "temperature_c": 9.8
+    },
+    {
+      "event_id": "47712fe7-b27b-528f-95bd-cca1edbb2e21",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:22:00Z",
+      "temperature_c": 6.4
+    },
+    {
+      "event_id": "3fe2b3f3-e6bd-564e-9f22-45a5c76f5d75",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:23:00Z",
+      "temperature_c": 9.1
+    },
+    {
+      "event_id": "780c2cee-984c-5242-ad77-8dd19f385720",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:23:00Z",
+      "temperature_c": 6.05
+    },
+    {
+      "event_id": "282b3339-f110-52b8-931c-d1ecc70c40b4",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:24:00Z",
+      "temperature_c": 8.5
+    },
+    {
+      "event_id": "71fb6c38-102d-54fc-8993-66c3f33fff0b",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:24:00Z",
+      "temperature_c": 5.65
+    },
+    {
+      "event_id": "ac489984-5754-5ddd-a0f4-6fcf4ef23c48",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:25:00Z",
+      "temperature_c": 7.5
+    },
+    {
+      "event_id": "2f97edb3-1bd9-5b12-84b6-f79e066a2a25",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:25:00Z",
+      "temperature_c": 5.25
+    },
+    {
+      "event_id": "3c7cf433-baf2-57fe-a42f-3d46e822f5ae",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:26:00Z",
+      "temperature_c": 6.6
+    },
+    {
+      "event_id": "d4a43571-8f93-5195-a277-af971f8620fc",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:26:00Z",
+      "temperature_c": 4.9
+    },
+    {
+      "event_id": "d75c3da2-2612-5e89-985b-da3ee6a44101",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:27:00Z",
+      "temperature_c": 5.9
+    },
+    {
+      "event_id": "b0db737b-57c8-5f0a-89d8-3eb0c162e49c",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:27:00Z",
+      "temperature_c": 4.65
+    },
+    {
+      "event_id": "4408e923-7d37-56c0-9336-a915eb08eb83",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:28:00Z",
+      "temperature_c": 5.3
+    },
+    {
+      "event_id": "812a12ac-bebd-55b8-9adc-5a213218d672",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:28:00Z",
+      "temperature_c": 4.45
+    },
+    {
+      "event_id": "076f535a-5e2d-5791-a5d7-ec4909b7285f",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:29:00Z",
+      "temperature_c": 4.8
+    },
+    {
+      "event_id": "984b32c3-e743-5070-be3b-ad59e9a4dc94",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:29:00Z",
+      "temperature_c": 4.3
+    },
+    {
+      "event_id": "12ac9f04-92cb-5282-8873-cfe8fd1deced",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:30:00Z",
+      "temperature_c": 4.6
+    },
+    {
+      "event_id": "5f04b080-8550-51d2-8fa8-752af23174db",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:30:00Z",
+      "temperature_c": 4.25
+    },
+    {
+      "event_id": "0e102953-3405-5e13-bb33-bbb3ba8f9626",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:31:00Z",
+      "temperature_c": 4.55
+    },
+    {
+      "event_id": "c215c726-203d-5f6f-a328-d4e204a13a9b",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:31:00Z",
+      "temperature_c": 4.22
+    },
+    {
+      "event_id": "7c2d9000-3a47-5d37-a48a-5bd72936f45b",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:32:00Z",
+      "temperature_c": 4.5
+    },
+    {
+      "event_id": "14c5a28a-0170-5d5a-bb77-6c5fdfd67a07",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:32:00Z",
+      "temperature_c": 4.2
+    },
+    {
+      "event_id": "60781d10-c45e-53e2-9ab8-542dabe7275c",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:33:00Z",
+      "temperature_c": 4.48
+    },
+    {
+      "event_id": "2d9302e4-ecea-5dc0-ab99-3f66a7d05655",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:33:00Z",
+      "temperature_c": 4.19
+    },
+    {
+      "event_id": "8b779aba-79fb-58b6-82e3-f80c103cc3f8",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:34:00Z",
+      "temperature_c": 4.52
+    },
+    {
+      "event_id": "7defc08d-0834-580e-af02-0f7f51cda4a2",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:34:00Z",
+      "temperature_c": 4.21
+    },
+    {
+      "event_id": "f0d6db82-1ec9-5f45-8ad2-7314b2939312",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:35:00Z",
+      "temperature_c": 4.5
+    },
+    {
+      "event_id": "5d1e5801-5391-5d9c-b8cb-f4273c8bf8b7",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:35:00Z",
+      "temperature_c": 4.2
+    },
+    {
+      "event_id": "46405212-f7b7-51d0-878f-29173e09b497",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:36:00Z",
+      "temperature_c": 4.49
+    },
+    {
+      "event_id": "04c5bb53-1f77-56e2-a1df-b62d1b9f3ca6",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:36:00Z",
+      "temperature_c": 4.18
+    },
+    {
+      "event_id": "5668959e-6192-5e26-a0c5-cac2a329d0f4",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:37:00Z",
+      "temperature_c": 4.51
+    },
+    {
+      "event_id": "1ded7204-8e26-5d95-96f1-42d53f09d3ba",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:37:00Z",
+      "temperature_c": 4.22
+    },
+    {
+      "event_id": "c5520bf6-d308-5e08-96f1-f548e5373dc9",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:38:00Z",
+      "temperature_c": 4.5
+    },
+    {
+      "event_id": "f1a81aea-87a8-5822-b692-ebd642848331",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:38:00Z",
+      "temperature_c": 4.2
+    },
+    {
+      "event_id": "cb0232fa-67f2-5629-a52b-5c466bd3d247",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:39:00Z",
+      "temperature_c": 4.48
+    },
+    {
+      "event_id": "4960dceb-b8ec-56d6-9a14-f665c5ac26e6",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:39:00Z",
+      "temperature_c": 4.19
+    },
+    {
+      "event_id": "ffb60450-86a1-5a3d-8fc9-8cf613bfee2a",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:40:00Z",
+      "temperature_c": 4.5
+    },
+    {
+      "event_id": "090d51c3-cfe0-53f7-b7dc-96667999c822",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:40:00Z",
+      "temperature_c": 4.2
+    },
+    {
+      "event_id": "20a69bbf-bf66-5e34-8da8-3c7199dd6b4f",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:41:00Z",
+      "temperature_c": 4.52
+    },
+    {
+      "event_id": "81803dcf-1da9-5071-bec1-eb00a0e11363",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:41:00Z",
+      "temperature_c": 4.21
+    },
+    {
+      "event_id": "76fe8d66-ab51-5361-8303-6ae3a64306ec",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:42:00Z",
+      "temperature_c": 4.49
+    },
+    {
+      "event_id": "cd54e546-b5fb-58f7-b67b-0b84eba62378",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:42:00Z",
+      "temperature_c": 4.19
+    },
+    {
+      "event_id": "083ad946-9c44-5c31-8f94-562c48f18458",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:43:00Z",
+      "temperature_c": 4.51
+    },
+    {
+      "event_id": "7d143cf6-4dfb-5320-8c6b-2408efdc21f4",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:43:00Z",
+      "temperature_c": 4.2
+    },
+    {
+      "event_id": "9c8a129f-4124-539b-8f30-699b18d01325",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:44:00Z",
+      "temperature_c": 4.5
+    },
+    {
+      "event_id": "b54a159c-3084-5cdf-9c01-52188e57a116",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:44:00Z",
+      "temperature_c": 4.2
+    },
+    {
+      "event_id": "bee6833c-516c-52ab-a9ed-39ac69b4d0c4",
+      "sensor_id": "sensor-ref-001",
+      "observed_at": "2026-09-17T10:45:00Z",
+      "temperature_c": 4.5
+    },
+    {
+      "event_id": "e802b5c2-1cec-5107-abcc-a143d754179a",
+      "sensor_id": "sensor-cmp-001",
+      "observed_at": "2026-09-17T10:45:00Z",
+      "temperature_c": 4.2
+    }
+  ],
+  "events": [
+    {
+      "event_id": "ff29dbe8-4754-575d-8373-a027e419143a",
+      "observed_at": "2026-09-17T10:10:00Z",
+      "event_type": "door_state",
+      "value": "open",
+      "source": "door_sensor"
+    },
+    {
+      "event_id": "f487c62c-dfee-55e5-898b-0bcc80cacc74",
+      "observed_at": "2026-09-17T10:20:00Z",
+      "event_type": "door_state",
+      "value": "closed",
+      "source": "door_sensor"
+    }
+  ]
+}

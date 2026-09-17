@@ -1,0 +1,72 @@
+{
+  "report_id": "a7b8c9d0-e1f2-4a3b-8c4d-5e6f7a8b9c0d",
+  "run_id": "b4c5d6e7-f8a9-4b0c-1d2e-3f4a5b6c7d8e",
+  "snapshot_id": "4a72d8e0-1c3b-4e9f-9a2d-8f1e6b3c5a01",
+  "snapshot_sha256": "332d2c241d0efc45d4f36096c6d1bb99254dac3892614140a3c5e7f79b48a774",
+  "schema_version": "1.0",
+  "detector_version": "1.0.0",
+  "prompt_version": null,
+  "model_id": null,
+  "created_at": "2026-09-17T10:46:00Z",
+  "cutoff_at": "2026-09-17T10:45:00Z",
+  "measurements": [
+    {
+      "sensor_id": "sensor-ref-001",
+      "role": "reference",
+      "excursion_detected": true,
+      "first_observed_out_at": "2026-09-17T10:15:00Z",
+      "last_observed_out_at": "2026-09-17T10:24:00Z",
+      "estimated_out_of_range_seconds": 600.0,
+      "unknown_duration_seconds": 0.0,
+      "sample_count": 46,
+      "observed_min_c": 4.48,
+      "observed_max_c": 11.2,
+      "censored_start": false,
+      "censored_end": false,
+      "coverage_status": "full",
+      "evidence_ids": [
+        "90000000-0000-4000-8000-000000000001"
+      ]
+    },
+    {
+      "sensor_id": "sensor-cmp-001",
+      "role": "comparison",
+      "excursion_detected": false,
+      "first_observed_out_at": null,
+      "last_observed_out_at": null,
+      "estimated_out_of_range_seconds": 0.0,
+      "unknown_duration_seconds": 0.0,
+      "sample_count": 46,
+      "observed_min_c": 4.18,
+      "observed_max_c": 6.85,
+      "censored_start": false,
+      "censored_end": false,
+      "coverage_status": "full",
+      "evidence_ids": [
+        "90000000-0000-4000-8000-000000000003"
+      ]
+    }
+  ],
+  "outcome": "unresolved",
+  "primary_hypothesis": null,
+  "hypotheses": [],
+  "next_checks": [
+    {
+      "action_code": "quality_review",
+      "reason": "AI model analysis was unavailable; deterministic temperature excursion requires manual review.",
+      "evidence_ids": [
+        "90000000-0000-4000-8000-000000000001"
+      ]
+    }
+  ],
+  "limitations": [
+    "AI model unavailable; deterministic analysis only"
+  ],
+  "verification": {
+    "status": "passed",
+    "errors": [],
+    "warnings": []
+  },
+  "generation_mode": "deterministic_only",
+  "review_required": true
+}

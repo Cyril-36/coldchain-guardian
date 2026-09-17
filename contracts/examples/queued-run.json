@@ -1,0 +1,19 @@
+{
+  "run_id": "c1a2b3c4-d5e6-4f7a-8b9c-0d1e2f3a4b5c",
+  "owner_sub": "auth0|65f1a2b3c4d5e6f7a8b9c0d1",
+  "status": "queued",
+  "stage": "preparing",
+  "stage_events": [],
+  "created_at": "2026-09-17T10:45:30Z",
+  "updated_at": "2026-09-17T10:45:32Z",
+  "snapshot_ref": {
+    "key": "snapshots/4a72d8e0-1c3b-4e9f-9a2d-8f1e6b3c5a01.json",
+    "sha256": "332d2c241d0efc45d4f36096c6d1bb99254dac3892614140a3c5e7f79b48a774"
+  },
+  "report_ref": null,
+  "scenario_id": "door_open_excursion",
+  "error": null,
+  "review": null,
+  "generation_mode": "bedrock",
+  "is_public_demo": false
+}

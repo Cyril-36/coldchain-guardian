@@ -1,0 +1,290 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: ColdChain Guardian — investigation backend
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 30
+    MemorySize: 256
+    Environment:
+      Variables:
+        TABLE_NAME: !Ref RunsTable
+        ARTIFACT_BUCKET: !Ref ArtifactBucket
+        QUEUE_URL: !Ref InvestigationQueue
+        LOG_LEVEL: INFO
+
+Parameters:
+  BedrockModelId:
+    Type: String
+    Default: amazon.nova-lite-v1:0
+  MaxRunsPerDay:
+    Type: Number
+    Default: 50
+  Stage:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+
+Resources:
+  # ── API Gateway ──────────────────────────────────────────────────────
+
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Stage
+      CorsConfiguration:
+        AllowOrigins:
+          - '*'  # Tightened after Amplify deploy to exact origin
+        AllowMethods:
+          - GET
+          - POST
+          - OPTIONS
+        AllowHeaders:
+          - Authorization
+          - Content-Type
+      Auth:
+        DefaultAuthorizer: CognitoAuthorizer
+        Authorizers:
+          CognitoAuthorizer:
+            AuthorizationScopes:
+              - coldchain/write
+            IdentitySource: $request.header.Authorization
+            JwtConfiguration:
+              issuer: !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}'
+              audience:
+                - !Ref UserPoolClient
+
+  # ── API Lambda ───────────────────────────────────────────────────────
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: coldchain.api.handler.handler
+      CodeUri: ../backend
+      Timeout: 29
+      Environment:
+        Variables:
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
+          MAX_RUNS_PER_DAY: !Ref MaxRunsPerDay
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RunsTable
+        - S3CrudPolicy:
+            BucketName: !Ref ArtifactBucket
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt InvestigationQueue.QueueName
+      Events:
+        Health:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /v1/health
+            Method: GET
+            Auth:
+              Authorizer: NONE
+        DemoRuns:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /v1/demo-runs
+            Method: GET
+            Auth:
+              Authorizer: NONE
+        DemoRunDetail:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /v1/demo-runs/{run_id}
+            Method: GET
+            Auth:
+              Authorizer: NONE
+        DemoSnapshot:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /v1/demo-runs/{run_id}/snapshot
+            Method: GET
+            Auth:
+              Authorizer: NONE
+        DemoReport:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /v1/demo-runs/{run_id}/report
+            Method: GET
+            Auth:
+              Authorizer: NONE
+        CreateRun:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /v1/runs
+            Method: POST
+        GetRun:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /v1/runs/{run_id}
+            Method: GET
+        GetSnapshot:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /v1/runs/{run_id}/snapshot
+            Method: GET
+        GetReport:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /v1/runs/{run_id}/report
+            Method: GET
+        PostReview:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /v1/runs/{run_id}/review
+            Method: POST
+
+  # ── Worker Lambda ────────────────────────────────────────────────────
+
+  WorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: coldchain.worker.handler.handler
+      CodeUri: ../backend
+      Timeout: 120
+      MemorySize: 512
+      Environment:
+        Variables:
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
+          USE_BEDROCK: 'true'
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RunsTable
+        - S3CrudPolicy:
+            BucketName: !Ref ArtifactBucket
+        - Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+              Resource: !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/${BedrockModelId}'
+      Events:
+        SQSTrigger:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt InvestigationQueue.Arn
+            BatchSize: 1
+
+  # ── SQS ──────────────────────────────────────────────────────────────
+
+  InvestigationQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      VisibilityTimeout: 720
+      MessageRetentionPeriod: 86400
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DeadLetterQueue.Arn
+        maxReceiveCount: 3
+
+  DeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: 604800  # 7 days
+
+  # ── DynamoDB ─────────────────────────────────────────────────────────
+
+  RunsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+
+  # ── S3 ───────────────────────────────────────────────────────────────
+
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: CleanupOldArtifacts
+            Status: Enabled
+            ExpirationInDays: 30
+
+  # ── Cognito ──────────────────────────────────────────────────────────
+
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub 'coldchain-${Stage}'
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true  # No self-signup
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false  # Public client with PKCE
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthScopes:
+        - openid
+        - email
+        - coldchain/write
+      AllowedOAuthFlowsUserPoolClient: true
+      SupportedIdentityProviders:
+        - COGNITO
+      CallbackURLs:
+        - http://localhost:5173/callback  # Updated after Amplify deploy
+      LogoutURLs:
+        - http://localhost:5173/          # Updated after Amplify deploy
+
+  UserPoolResourceServer:
+    Type: AWS::Cognito::UserPoolResourceServer
+    Properties:
+      UserPoolId: !Ref UserPool
+      Identifier: coldchain
+      Name: ColdChain API
+      Scopes:
+        - ScopeName: write
+          ScopeDescription: Create runs and submit reviews
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub 'coldchain-${Stage}-${AWS::AccountId}'
+      UserPoolId: !Ref UserPool
+
+Outputs:
+  ApiUrl:
+    Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}'
+  QueueUrl:
+    Value: !Ref InvestigationQueue
+  TableName:
+    Value: !Ref RunsTable
+  BucketName:
+    Value: !Ref ArtifactBucket
+  UserPoolId:
+    Value: !Ref UserPool
+  UserPoolClientId:
+    Value: !Ref UserPoolClient
+  CognitoDomain:
+    Value: !Sub 'coldchain-${Stage}-${AWS::AccountId}.auth.${AWS::Region}.amazoncognito.com'

@@ -1,0 +1,112 @@
+{
+  "report_id": "e5f6a7b8-c9d0-4e1f-8a2b-3c4d5e6f7a8b",
+  "run_id": "d2a3b4c5-e6f7-4a8b-9c0d-1e2f3a4b5c6d",
+  "snapshot_id": "4a72d8e0-1c3b-4e9f-9a2d-8f1e6b3c5a01",
+  "snapshot_sha256": "332d2c241d0efc45d4f36096c6d1bb99254dac3892614140a3c5e7f79b48a774",
+  "schema_version": "1.0",
+  "detector_version": "1.0.0",
+  "prompt_version": "1.0.0",
+  "model_id": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+  "created_at": "2026-09-17T10:46:00Z",
+  "cutoff_at": "2026-09-17T10:45:00Z",
+  "measurements": [
+    {
+      "sensor_id": "sensor-ref-001",
+      "role": "reference",
+      "excursion_detected": true,
+      "first_observed_out_at": "2026-09-17T10:15:00Z",
+      "last_observed_out_at": "2026-09-17T10:24:00Z",
+      "estimated_out_of_range_seconds": 600.0,
+      "unknown_duration_seconds": 0.0,
+      "sample_count": 46,
+      "observed_min_c": 4.48,
+      "observed_max_c": 11.2,
+      "censored_start": false,
+      "censored_end": false,
+      "coverage_status": "full",
+      "evidence_ids": [
+        "90000000-0000-4000-8000-000000000001",
+        "90000000-0000-4000-8000-000000000002"
+      ]
+    },
+    {
+      "sensor_id": "sensor-cmp-001",
+      "role": "comparison",
+      "excursion_detected": false,
+      "first_observed_out_at": null,
+      "last_observed_out_at": null,
+      "estimated_out_of_range_seconds": 0.0,
+      "unknown_duration_seconds": 0.0,
+      "sample_count": 46,
+      "observed_min_c": 4.18,
+      "observed_max_c": 6.85,
+      "censored_start": false,
+      "censored_end": false,
+      "coverage_status": "full",
+      "evidence_ids": [
+        "90000000-0000-4000-8000-000000000003"
+      ]
+    }
+  ],
+  "outcome": "hypothesis_supported",
+  "primary_hypothesis": "door_exposure",
+  "hypotheses": [
+    {
+      "hypothesis": "door_exposure",
+      "assessment": "supported",
+      "supporting_evidence_ids": [
+        "90000000-0000-4000-8000-000000000001",
+        "90000000-0000-4000-8000-000000000004"
+      ],
+      "conflicting_evidence_ids": [],
+      "missing_evidence": [],
+      "explanation": "Reference sensor temperature rose above 8.00°C following door open event at 10:10:00Z and recovered within 5 minutes after door closure at 10:20:00Z."
+    },
+    {
+      "hypothesis": "refrigeration_problem",
+      "assessment": "contradicted",
+      "supporting_evidence_ids": [],
+      "conflicting_evidence_ids": [
+        "90000000-0000-4000-8000-000000000002"
+      ],
+      "missing_evidence": [],
+      "explanation": "Rapid temperature recovery after door closure confirms active refrigeration remained operational and effective."
+    },
+    {
+      "hypothesis": "sensor_disagreement",
+      "assessment": "contradicted",
+      "supporting_evidence_ids": [],
+      "conflicting_evidence_ids": [
+        "90000000-0000-4000-8000-000000000003"
+      ],
+      "missing_evidence": [],
+      "explanation": "Comparison sensor observed moderate warming (peak 6.85°C) without exceeding limits, consistent with normal interior thermal buffering."
+    }
+  ],
+  "next_checks": [
+    {
+      "action_code": "inspect_door",
+      "reason": "Inspect cargo door seals and latches for mechanical wear or improper sealing.",
+      "evidence_ids": [
+        "90000000-0000-4000-8000-000000000004"
+      ]
+    },
+    {
+      "action_code": "quality_review",
+      "reason": "Reference sensor excursion exceeded 8.00°C for an estimated 600.0s; QA assessment required.",
+      "evidence_ids": [
+        "90000000-0000-4000-8000-000000000001"
+      ]
+    }
+  ],
+  "limitations": [
+    "Simulated shipment environment; ambient temperature sensor was unavailable"
+  ],
+  "verification": {
+    "status": "passed",
+    "errors": [],
+    "warnings": []
+  },
+  "generation_mode": "bedrock",
+  "review_required": true
+}
