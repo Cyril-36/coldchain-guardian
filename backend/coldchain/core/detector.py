@@ -12,9 +12,11 @@ import uuid
 from datetime import datetime
 from typing import NamedTuple
 
-from coldchain.contracts.enums import CoverageStatus
+from coldchain.contracts.enums import CoverageStatus, EvidenceKind
 from coldchain.contracts.schemas import (
     Event,
+    EvidenceInterval,
+    EvidenceRef,
     Policy,
     Reading,
     SensorMeasurement,
@@ -262,6 +264,85 @@ def detect_excursions(
     return measurements
 
 
+def build_measurement_evidence(
+    snapshot: Snapshot,
+    measurements: list[SensorMeasurement],
+) -> list[EvidenceRef]:
+    """Build canonical EvidenceRef items for detector measurements.
+
+    For each measurement:
+    - Sets ``kind=EvidenceKind.derived_metric``
+    - Associates with the deterministic measurement evidence ID
+    - Attaches sensor reading event IDs as ``record_ids``
+    - Sets the out-of-range interval when an excursion was observed
+    - Sets ``method_version=DETECTOR_VERSION``
+    """
+    sensor_map = {s.sensor_id: s for s in snapshot.sensors}
+    readings_by_sensor: dict[str, list[Reading]] = {}
+    for r in snapshot.readings:
+        readings_by_sensor.setdefault(r.sensor_id, []).append(r)
+
+    evidence_items: list[EvidenceRef] = []
+    for m in measurements:
+        sid = m.sensor_id
+        sensor = sensor_map.get(sid)
+        placement = sensor.placement if sensor else "unknown"
+        readings = readings_by_sensor.get(sid, [])
+        record_ids = [r.event_id for r in readings]
+
+        if m.evidence_ids:
+            eid = m.evidence_ids[0]
+        else:
+            eid = str(uuid.uuid5(uuid.UUID(snapshot.snapshot_id), f"measurement:{sid}"))
+
+        interval: EvidenceInterval | None = None
+        if m.first_observed_out_at is not None:
+            interval = EvidenceInterval(
+                start_at=m.first_observed_out_at,
+                end_at=m.last_observed_out_at or m.first_observed_out_at,
+            )
+
+        if is_excursion_detected(m):
+            summary = (
+                f"Sensor {sid} ({placement}): excursion detected with estimated "
+                f"{m.estimated_out_of_range_seconds}s out of range [{snapshot.policy.min_c}, "
+                f"{snapshot.policy.max_c}] °C, observed range [{m.observed_min_c}, "
+                f"{m.observed_max_c}] °C across {m.sample_count} samples."
+            )
+        elif m.sample_count == 0:
+            summary = f"Sensor {sid} ({placement}): no readings observed."
+        else:
+            summary = (
+                f"Sensor {sid} ({placement}): maintained normal temperature "
+                f"range [{m.observed_min_c}, {m.observed_max_c}] °C "
+                f"across {m.sample_count} samples."
+            )
+
+        evidence_items.append(
+            EvidenceRef(
+                evidence_id=eid,
+                snapshot_id=snapshot.snapshot_id,
+                kind=EvidenceKind.derived_metric,
+                record_ids=record_ids,
+                interval=interval,
+                summary=summary,
+                method_version=DETECTOR_VERSION,
+            )
+        )
+
+    return evidence_items
+
+
+def detect_excursions_with_evidence(
+    snapshot: Snapshot,
+    policy: Policy,
+) -> tuple[list[SensorMeasurement], list[EvidenceRef]]:
+    """Compute per-sensor measurements and matching EvidenceRef items."""
+    measurements = detect_excursions(snapshot, policy)
+    evidence = build_measurement_evidence(snapshot, measurements)
+    return measurements, evidence
+
+
 def check_multiple_windows(
     measurements: list[SensorMeasurement],
     snapshot: Snapshot | None = None,
@@ -272,42 +353,53 @@ def check_multiple_windows(
     multiple_windows_unsupported.
 
     Conditions indicating multiple windows:
-    1. A sensor with an excursion has an unknown duration gap (data discontinuity).
-    2. A sensor readings exhibit two or more disjoint out-of-range windows
+    1. A sensor readings exhibit two or more disjoint out-of-range windows
        separated by in-range readings.
+    2. A gap > max_gap_seconds occurs during an excursion (i.e. at least one
+       of the gap's bordering readings is out of range, or occurs while
+       an excursion is in progress).
     """
-    # Condition 1: gap during/with excursion
-    for m in measurements:
-        if is_excursion_detected(m) and m.unknown_duration_seconds > 0:
+    if snapshot is None:
+        return False
+
+    policy = snapshot.policy
+    readings_by_sensor: dict[str, list[Reading]] = {}
+    for r in snapshot.readings:
+        readings_by_sensor.setdefault(r.sensor_id, []).append(r)
+
+    for sensor in snapshot.sensors:
+        readings = sorted(
+            readings_by_sensor.get(sensor.sensor_id, []),
+            key=_reading_sort_key,
+        )
+        if not readings:
+            continue
+
+        in_excursion = False
+        window_count = 0
+        for i, r in enumerate(readings):
+            out = _out_of_range(r.temperature_c, policy.min_c, policy.max_c)
+            if out and not in_excursion:
+                window_count += 1
+                in_excursion = True
+            elif not out and in_excursion:
+                in_excursion = False
+
+            # Check gap to next reading
+            if i < len(readings) - 1:
+                next_r = readings[i + 1]
+                gap = _ts(next_r.observed_at) - _ts(r.observed_at)
+                if gap > policy.max_gap_seconds:
+                    next_out = _out_of_range(
+                        next_r.temperature_c, policy.min_c, policy.max_c
+                    )
+                    # Gap touches an excursion if either endpoint is out of range
+                    # or if the gap interrupted an active excursion.
+                    if out or next_out or in_excursion:
+                        return True
+
+        if window_count > 1:
             return True
-
-    # Condition 2: multiple separate out-of-range windows
-    if snapshot is not None:
-        policy = snapshot.policy
-        readings_by_sensor: dict[str, list[Reading]] = {}
-        for r in snapshot.readings:
-            readings_by_sensor.setdefault(r.sensor_id, []).append(r)
-
-        for sensor in snapshot.sensors:
-            readings = sorted(
-                readings_by_sensor.get(sensor.sensor_id, []),
-                key=_reading_sort_key,
-            )
-            if not readings:
-                continue
-
-            in_excursion = False
-            window_count = 0
-            for r in readings:
-                out = _out_of_range(r.temperature_c, policy.min_c, policy.max_c)
-                if out and not in_excursion:
-                    window_count += 1
-                    in_excursion = True
-                elif not out and in_excursion:
-                    in_excursion = False
-
-            if window_count > 1:
-                return True
 
     return False
 
@@ -322,18 +414,20 @@ class DetectionResult(NamedTuple):
     has_excursion: bool
     needs_review: bool
     reason: str | None
+    evidence: list[EvidenceRef] = []
 
 
 def build_detection_result(snapshot: Snapshot) -> DetectionResult:
     """Validate, detect and check for multiple windows in one call.
 
-    Returns a ``DetectionResult`` with measurements, flags and an optional
-    review reason string.
+    Returns a ``DetectionResult`` with measurements, flags, an optional
+    review reason string, and matching canonical evidence references.
     """
     clean = validate_snapshot(snapshot)
     measurements = detect_excursions(clean, clean.policy)
     has_excursion = any(is_excursion_detected(m) for m in measurements)
     multi = check_multiple_windows(measurements, clean)
+    evidence = build_measurement_evidence(clean, measurements)
 
     if multi:
         return DetectionResult(
@@ -341,11 +435,25 @@ def build_detection_result(snapshot: Snapshot) -> DetectionResult:
             has_excursion=has_excursion,
             needs_review=True,
             reason="multiple_windows_unsupported",
+            evidence=evidence,
         )
+
+    has_incomplete_coverage = any(
+        m.coverage_status != CoverageStatus.complete for m in measurements
+    )
+    needs_review = has_excursion or has_incomplete_coverage
+
+    reason: str | None = None
+    if not has_excursion and has_incomplete_coverage:
+        has_insufficient = any(
+            m.coverage_status == CoverageStatus.insufficient for m in measurements
+        )
+        reason = "insufficient_coverage" if has_insufficient else "data_gap"
 
     return DetectionResult(
         measurements=measurements,
         has_excursion=has_excursion,
-        needs_review=has_excursion,
-        reason=None,
+        needs_review=needs_review,
+        reason=reason,
+        evidence=evidence,
     )

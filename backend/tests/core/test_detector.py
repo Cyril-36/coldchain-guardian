@@ -10,20 +10,30 @@ import pytest
 from coldchain.contracts.enums import (
     CoverageStatus,
     EventType,
+    EvidenceKind,
+    GenerationMode,
+    HypothesisType,
+    Outcome,
     SensorRole,
+    VerificationStatus,
 )
 from coldchain.contracts.schemas import (
     Event,
     Policy,
     Reading,
+    Report,
     Sensor,
     Snapshot,
+    Verification,
+    snapshot_sha256,
 )
 from coldchain.core.detector import (
     DETECTOR_VERSION,
     build_detection_result,
+    build_measurement_evidence,
     check_multiple_windows,
     detect_excursions,
+    detect_excursions_with_evidence,
     is_excursion_detected,
     validate_snapshot,
 )
@@ -510,40 +520,169 @@ def test_multiple_windows_disjoint_spikes():
     assert check_multiple_windows(res.measurements, snap) is True
 
 
+def test_excursion_followed_by_unrelated_normal_gap():
+    """An excursion followed by an unrelated gap between normal readings preserves
+
+    partial coverage without triggering multiple_windows_unsupported.
+    """
+    readings = [
+        # One excursion window (5 -> 9 -> 9 -> 5 yields 90s above 8°C)
+        _reading("r-0", "s-ref", 0, 5.0),
+        _reading("r-1", "s-ref", 60, 9.0),
+        _reading("r-2", "s-ref", 120, 9.0),
+        _reading("r-3", "s-ref", 180, 5.0),
+        # Normal reading before gap
+        _reading("r-4", "s-ref", 240, 5.0),
+        # 280-second normal-to-normal gap (520 - 240 = 280s > 120s max_gap)
+        _reading("r-5", "s-ref", 520, 5.0),
+        _reading("r-6", "s-ref", 580, 5.0),
+    ]
+    snap = make_snapshot(readings, cutoff_seconds=600)
+    res = build_detection_result(snap)
+
+    # Excursion is detected
+    assert res.has_excursion is True
+    # Requires review because an excursion occurred
+    assert res.needs_review is True
+    # Must NOT claim multiple windows
+    assert res.reason is None
+    assert check_multiple_windows(res.measurements, snap) is False
+
+    # Partial coverage is preserved on the measurement
+    m = res.measurements[0]
+    assert m.estimated_out_of_range_seconds == 90.0
+    assert m.unknown_duration_seconds == 280.0
+    assert m.coverage_status == CoverageStatus.partial
+
+
 # ── Sensor Coverage and Evidence Determinism Tests ──────────────────────────
 
 
 def test_sensor_with_no_readings():
-    """A configured sensor with no readings has insufficient coverage."""
+    """A configured comparison sensor with no readings triggers needs_review."""
     sensors = [
         Sensor(sensor_id=_uid("s-ref"), placement="front_air", role=SensorRole.reference),
         Sensor(sensor_id=_uid("s-cmp"), placement="rear_air", role=SensorRole.comparison),
     ]
-    # Only supply readings for s-ref
+    # Only supply readings for s-ref (normal readings)
     readings = [
         _reading("r-0", "s-ref", 0, 5.0),
         _reading("r-1", "s-ref", 60, 5.0),
     ]
     snap = make_snapshot(readings, sensors=sensors)
-    measurements = detect_excursions(snap, POLICY)
+    res = build_detection_result(snap)
 
-    cmp_m = next(m for m in measurements if m.sensor_id == _uid("s-cmp"))
+    cmp_m = next(m for m in res.measurements if m.sensor_id == _uid("s-cmp"))
     assert cmp_m.sample_count == 0
     assert cmp_m.coverage_status == CoverageStatus.insufficient
     assert is_excursion_detected(cmp_m) is False
 
+    # Missing data must not be treated as a normal control
+    assert res.has_excursion is False
+    assert res.needs_review is True
+    assert res.reason == "insufficient_coverage"
+
 
 def test_sensor_with_single_reading():
-    """A sensor with only one reading has insufficient coverage to assess duration."""
+    """A reference sensor with only one reading has insufficient coverage.
+
+    Triggers needs_review without treating normal reading as a normal control.
+    """
     readings = [
         _reading("r-0", "s-ref", 0, 5.0),
     ]
     snap = make_snapshot(readings)
-    measurements = detect_excursions(snap, POLICY)
+    res = build_detection_result(snap)
 
-    m = measurements[0]
+    m = res.measurements[0]
     assert m.sample_count == 1
     assert m.coverage_status == CoverageStatus.insufficient
+
+    # Normal single reading cannot be treated as a normal control
+    assert res.has_excursion is False
+    assert res.needs_review is True
+    assert res.reason == "insufficient_coverage"
+
+
+def test_build_measurement_evidence_and_report_construction():
+    """Measurements cite evidence IDs matching produced EvidenceRef items.
+
+    A canonical Report constructed from these measurements and evidence
+    passes schema and provenance validation.
+    """
+    door_file = Path(__file__).parents[3] / "contracts" / "examples" / "door-snapshot.json"
+    with open(door_file) as f:
+        data = json.load(f)
+
+    snapshot = Snapshot.model_validate(data)
+    result = build_detection_result(snapshot)
+
+    assert len(result.evidence) == len(result.measurements)
+    ev_map = {e.evidence_id: e for e in result.evidence}
+
+    for m in result.measurements:
+        assert len(m.evidence_ids) == 1
+        eid = m.evidence_ids[0]
+        assert eid in ev_map
+        ev = ev_map[eid]
+        assert ev.snapshot_id == snapshot.snapshot_id
+        assert ev.kind == EvidenceKind.derived_metric
+        assert ev.method_version == DETECTOR_VERSION
+        assert len(ev.record_ids) == m.sample_count
+        assert ev.interval is not None
+        assert ev.interval.start_at == m.first_observed_out_at
+        assert ev.interval.end_at == m.last_observed_out_at
+
+    # Verify build_measurement_evidence produces identical evidence
+    direct_evidence = build_measurement_evidence(snapshot, result.measurements)
+    assert direct_evidence == result.evidence
+
+    # Construct a valid canonical Report
+    report = Report(
+        report_id=str(uuid5(_TEST_NAMESPACE, "report-1")),
+        run_id=str(uuid5(_TEST_NAMESPACE, "run-1")),
+        snapshot_id=snapshot.snapshot_id,
+        snapshot_sha256=snapshot_sha256(snapshot),
+        detector_version=DETECTOR_VERSION,
+        prompt_version="1.0.0",
+        created_at=datetime.now(UTC),
+        cutoff_at=snapshot.cutoff_at,
+        measurements=result.measurements,
+        outcome=Outcome.hypothesis_supported,
+        primary_hypothesis=HypothesisType.door_exposure,
+        hypotheses=[],
+        next_checks=[],
+        limitations=[],
+        verification=Verification(status=VerificationStatus.passed),
+        generation_mode=GenerationMode.deterministic_only,
+        review_required=result.needs_review,
+        evidence=result.evidence,
+    )
+    assert report.report_id is not None
+    assert len(report.evidence) == 2
+
+    # Verify detect_excursions_with_evidence helper
+    measurements, evidence = detect_excursions_with_evidence(snapshot, snapshot.policy)
+    assert len(measurements) == 2
+    assert len(evidence) == 2
+
+    # Tampering check: omitting evidence causes provenance validation to reject Report
+    with pytest.raises(ValueError, match="cites unknown evidence_id"):
+        Report(
+            report_id=str(uuid5(_TEST_NAMESPACE, "report-2")),
+            run_id=str(uuid5(_TEST_NAMESPACE, "run-2")),
+            snapshot_id=snapshot.snapshot_id,
+            snapshot_sha256=snapshot_sha256(snapshot),
+            detector_version=DETECTOR_VERSION,
+            created_at=datetime.now(UTC),
+            cutoff_at=snapshot.cutoff_at,
+            measurements=result.measurements,
+            outcome=Outcome.hypothesis_supported,
+            verification=Verification(status=VerificationStatus.passed),
+            generation_mode=GenerationMode.deterministic_only,
+            review_required=result.needs_review,
+            evidence=[],  # Missing evidence triggers provenance validation error
+        )
 
 
 def test_deterministic_evidence_ids():
