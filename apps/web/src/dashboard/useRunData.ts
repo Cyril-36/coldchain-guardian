@@ -14,6 +14,7 @@ interface RunData {
   reportReady: boolean;
   loading: boolean;
   error: Error | null;
+  retry: () => void;
 }
 
 const ACTIVE_POLL_MS = 2_000;
@@ -33,6 +34,7 @@ function shouldRetry(error: unknown) {
 }
 
 export function useRunData(): RunData {
+  const [retryNonce, setRetryNonce] = useState(0);
   const [data, setData] = useState<RunData>({
     run: demoRun,
     snapshot: demoSnapshot,
@@ -42,6 +44,7 @@ export function useRunData(): RunData {
     reportReady: true,
     loading: false,
     error: null,
+    retry: () => setRetryNonce((value) => value + 1),
   });
 
   useEffect(() => {
@@ -54,6 +57,11 @@ export function useRunData(): RunData {
     const startedAt = Date.now();
     const client = new ApiClient({ baseUrl });
     const api = createApiEndpoints(client);
+
+    setData((current) => ({
+      ...current,
+      retry: () => setRetryNonce((value) => value + 1),
+    }));
 
     const clearPollTimer = () => {
       if (pollTimer !== undefined) {
@@ -70,16 +78,22 @@ export function useRunData(): RunData {
 
       if (cancelled) return;
 
+      const snapshotReady = snapshotResult.status === "fulfilled";
+      const reportReady = reportResult.status === "fulfilled";
+      const artifactError = currentRun.status !== "failed" && (!snapshotReady || !reportReady)
+        ? new Error("Investigation artifacts are not ready yet")
+        : null;
+
       setData((current) => ({
         ...current,
         run: currentRun,
-        snapshot: snapshotResult.status === "fulfilled" ? snapshotResult.value : current.snapshot,
-        report: reportResult.status === "fulfilled" ? reportResult.value : current.report,
+        snapshot: snapshotReady ? snapshotResult.value : current.snapshot,
+        report: reportReady ? reportResult.value : current.report,
         source: "api",
-        snapshotReady: snapshotResult.status === "fulfilled" || current.snapshotReady,
-        reportReady: reportResult.status === "fulfilled" || current.reportReady,
+        snapshotReady: snapshotReady || current.snapshotReady,
+        reportReady: reportReady || current.reportReady,
         loading: false,
-        error: null,
+        error: artifactError,
       }));
     };
 
@@ -148,7 +162,6 @@ export function useRunData(): RunData {
         if (cancelled) return;
 
         setData((current) => ({ ...current, run, source: "api", loading: true, error: null }));
-
         await hydrateArtifacts(run);
         if (cancelled) return;
 
@@ -176,7 +189,7 @@ export function useRunData(): RunData {
       clearPollTimer();
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, []);
+  }, [retryNonce]);
 
   return data;
 }
