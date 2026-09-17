@@ -329,6 +329,19 @@ class EvidenceRef(StrictBase):
     summary: str
     method_version: str | None = None
 
+    def model_dump(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        d = super().model_dump(*args, **kwargs)
+        for k in ("observed_at", "interval", "method_version"):
+            if d.get(k) is None:
+                d.pop(k, None)
+        return d
+
+    def model_dump_json(self, *args: Any, **kwargs: Any) -> str:
+        dump_kwargs = dict(kwargs)
+        indent = dump_kwargs.pop("indent", None)
+        d = self.model_dump(*args, mode="json", **dump_kwargs)
+        return json.dumps(d, indent=indent)
+
 
 # ── Measurement Models ──────────────────────────────────────────────────────
 
@@ -442,13 +455,29 @@ class Report(StrictBase):
 
         for m in self.measurements:
             for ev_id in m.evidence_ids:
-                if self.evidence and ev_id not in valid_ids:
+                if ev_id not in valid_ids:
                     raise ValueError(
                         f"Measurement for sensor '{m.sensor_id}' cites unknown "
                         f"evidence_id: '{ev_id}'"
                     )
 
         return self
+
+    def model_dump(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        d = super().model_dump(*args, **kwargs)
+        if "evidence" in d and isinstance(d["evidence"], list):
+            for item in d["evidence"]:
+                if isinstance(item, dict):
+                    for k in ("observed_at", "interval", "method_version"):
+                        if item.get(k) is None:
+                            item.pop(k, None)
+        return d
+
+    def model_dump_json(self, *args: Any, **kwargs: Any) -> str:
+        dump_kwargs = dict(kwargs)
+        indent = dump_kwargs.pop("indent", None)
+        d = self.model_dump(*args, mode="json", **dump_kwargs)
+        return json.dumps(d, indent=indent)
 
 
 # ── Storage & Run Models ────────────────────────────────────────────────────
@@ -522,6 +551,18 @@ class Run(StrictBase):
             raise ValueError(f"stage_events cannot exceed 40 items; got {len(v)}")
         return v
 
+    def model_dump(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        d = super().model_dump(*args, **kwargs)
+        if d.get("label") is None:
+            d.pop("label", None)
+        return d
+
+    def model_dump_json(self, *args: Any, **kwargs: Any) -> str:
+        dump_kwargs = dict(kwargs)
+        indent = dump_kwargs.pop("indent", None)
+        d = self.model_dump(*args, mode="json", **dump_kwargs)
+        return json.dumps(d, indent=indent)
+
 
 class RunSummary(StrictBase):
     run_id: UuidStr
@@ -534,6 +575,23 @@ class RunSummary(StrictBase):
     generation_mode: GenerationMode | None = None
     is_public_demo: bool = False
     label: str | None = None
+
+    def model_dump(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        d = super().model_dump(*args, **kwargs)
+        if d.get("label") is None:
+            d.pop("label", None)
+        return d
+
+    def model_dump_json(self, *args: Any, **kwargs: Any) -> str:
+        dump_kwargs = dict(kwargs)
+        indent = dump_kwargs.pop("indent", None)
+        d = self.model_dump(*args, mode="json", **dump_kwargs)
+        return json.dumps(d, indent=indent)
+
+
+class DemoRunSummary(RunSummary):
+    is_public_demo: Literal[True] = True
+    label: str
 
 
 class ClaimResult(StrictBase):

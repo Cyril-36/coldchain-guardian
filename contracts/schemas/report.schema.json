@@ -22,12 +22,10 @@
       "additionalProperties": false,
       "properties": {
         "start_at": {
-          "format": "date-time",
           "title": "Start At",
           "type": "string"
         },
         "end_at": {
-          "format": "date-time",
           "title": "End At",
           "type": "string"
         }
@@ -73,7 +71,6 @@
         "observed_at": {
           "anyOf": [
             {
-              "format": "date-time",
               "type": "string"
             },
             {
@@ -235,7 +232,6 @@
         "first_observed_out_at": {
           "anyOf": [
             {
-              "format": "date-time",
               "type": "string"
             },
             {
@@ -248,7 +244,6 @@
         "last_observed_out_at": {
           "anyOf": [
             {
-              "format": "date-time",
               "type": "string"
             },
             {
@@ -407,12 +402,10 @@
       "title": "Model Id"
     },
     "created_at": {
-      "format": "date-time",
       "title": "Created At",
       "type": "string"
     },
     "cutoff_at": {
-      "format": "date-time",
       "title": "Cutoff At",
       "type": "string"
     },

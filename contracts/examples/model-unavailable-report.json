@@ -7,7 +7,7 @@
   "detector_version": "1.0.0",
   "prompt_version": "1.0.0",
   "model_id": null,
-  "created_at": "2026-09-17T10:00:30Z",
+  "created_at": "2026-09-17T10:45:30Z",
   "cutoff_at": "2026-09-17T10:45:00Z",
   "measurements": [
     {
@@ -73,8 +73,22 @@
       "evidence_id": "91000000-0000-4000-8000-000000000001",
       "snapshot_id": "27b7281c-f4f5-5165-a244-10d1010db2bc",
       "kind": "derived_metric",
-      "record_ids": [],
-      "observed_at": null,
+      "record_ids": [
+        "ca9cfbab-19a2-502e-a1e9-bec30a030241",
+        "adc74345-7136-58a7-ba89-db576cdd0294",
+        "a7f8a485-5862-54cc-b414-eaaf8a92af25",
+        "1be079f8-f3d2-55f2-a98b-fe5764ccc591",
+        "a1863664-a76e-5b75-8927-d43ff9866ed2",
+        "f497681c-aaa6-5845-bd85-7b194acdc37a",
+        "918afdb9-3ec0-57a7-b229-b14fe6a70f93",
+        "cef61329-1cae-57e5-a5a8-d1aee32c801c",
+        "7ed0407b-65d7-5240-900f-cef3d324df91",
+        "47c2e096-de7e-555d-991e-b56ced5b71e3",
+        "75db1f49-f238-5506-b7ea-dd549ff015de",
+        "8db1f346-cec9-5390-aca5-25f3ac01f706",
+        "03e7d215-bf27-55ce-97f8-14d3c160638d",
+        "de8151a8-78f1-5afa-8770-2eef54e66b6c"
+      ],
       "interval": {
         "start_at": "2026-09-17T10:15:00Z",
         "end_at": "2026-09-17T10:28:00Z"
@@ -86,9 +100,22 @@
       "evidence_id": "91000000-0000-4000-8000-000000000002",
       "snapshot_id": "27b7281c-f4f5-5165-a244-10d1010db2bc",
       "kind": "derived_metric",
-      "record_ids": [],
-      "observed_at": null,
-      "interval": null,
+      "record_ids": [
+        "20283da1-6737-5372-9192-3f2a75b917ae",
+        "41cde450-673f-5f8b-807c-2a4273665f89",
+        "9817fd3a-cc4d-52b6-8c89-ffb7e0284500",
+        "0d57925e-83b8-5d2b-b297-0ddbd480ef2d",
+        "5a0ca626-b551-5c7a-985d-f9f51b38710c",
+        "4f2aebcf-37e9-5932-817b-3dc37c0bbf16",
+        "86040493-b99a-51f2-902a-8a7b496bf801",
+        "8ff7fda5-b396-5e40-98ae-00ff02e40369",
+        "95ab8f86-7fea-5f95-9951-10d79fe58e66",
+        "ca89a1be-ce38-547e-8799-82516bd244a5",
+        "b0aae74a-49a4-5702-bcfd-f90b7a25ee0a",
+        "334eb860-7313-5d20-8235-379d105d350d",
+        "1b0d4023-1502-51a6-badd-03297c02765c",
+        "4ab266b9-d099-51a1-b48a-3dbc713e4a83"
+      ],
       "summary": "Comparison rear air sensor maintained normal temperature range (5.04C - 5.36C).",
       "method_version": "1.0.0"
     }

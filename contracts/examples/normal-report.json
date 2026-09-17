@@ -7,7 +7,7 @@
   "detector_version": "1.0.0",
   "prompt_version": "1.0.0",
   "model_id": null,
-  "created_at": "2026-09-17T10:00:15Z",
+  "created_at": "2026-09-17T10:45:15Z",
   "cutoff_at": "2026-09-17T10:45:00Z",
   "measurements": [
     {
@@ -64,8 +64,6 @@
       "snapshot_id": "11111111-2222-4333-8444-555555555555",
       "kind": "derived_metric",
       "record_ids": [],
-      "observed_at": null,
-      "interval": null,
       "summary": "Reference air sensor maintained compliant range throughout snapshot.",
       "method_version": "1.0.0"
     },
@@ -74,8 +72,6 @@
       "snapshot_id": "11111111-2222-4333-8444-555555555555",
       "kind": "derived_metric",
       "record_ids": [],
-      "observed_at": null,
-      "interval": null,
       "summary": "Comparison air sensor maintained compliant range throughout snapshot.",
       "method_version": "1.0.0"
     }

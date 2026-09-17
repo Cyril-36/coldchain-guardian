@@ -37,6 +37,7 @@ from coldchain.contracts.schemas import (
     ReportSummary,
     Review,
     Run,
+    RunSummary,
     SensorMeasurement,
     Snapshot,
     StageEvent,
@@ -745,5 +746,92 @@ def test_report_generation_mode() -> None:
     data = _make_valid_report(generation_mode=GenerationMode.bedrock.value)
     report = Report.model_validate(data)
     assert report.generation_mode == GenerationMode.bedrock
+
+
+def test_report_rejects_measurement_with_unknown_evidence_id_when_evidence_list_is_empty() -> None:
+    """Unconditional citation validation:
+    Citations must be rejected even when evidence list is empty.
+    """
+    data = _make_valid_report()
+    data["evidence"] = []
+    data["hypotheses"] = []
+    data["next_checks"] = []
+    data["measurements"][0]["evidence_ids"] = ["99999999-9999-4999-8999-999999999999"]
+    with pytest.raises(ValidationError, match="cites unknown evidence_id"):
+        Report.model_validate(data)
+
+
+def test_run_model_dump_omits_none_label() -> None:
+    """Run serialization must omit label if None, but preserve string if present."""
+    run_no_label = Run(
+        run_id="00000000-0000-4000-8000-000000000001",
+        status=RunStatus.queued,
+        stage=PublicStage.preparing,
+        created_at=datetime(2026, 9, 17, 10, 45, 5, tzinfo=UTC),
+        shipment_id="00000000-0000-4000-8000-000000000002",
+        snapshot_id="00000000-0000-4000-8000-000000000003",
+        label=None,
+    )
+    dumped = run_no_label.model_dump(mode="json")
+    assert "label" not in dumped
+    assert "snapshot_ref" not in dumped
+
+    run_with_label = Run(
+        run_id="00000000-0000-4000-8000-000000000001",
+        status=RunStatus.queued,
+        stage=PublicStage.preparing,
+        created_at=datetime(2026, 9, 17, 10, 45, 5, tzinfo=UTC),
+        shipment_id="00000000-0000-4000-8000-000000000002",
+        snapshot_id="00000000-0000-4000-8000-000000000003",
+        label="door_seal_failure",
+    )
+    dumped_with = run_with_label.model_dump(mode="json")
+    assert dumped_with.get("label") == "door_seal_failure"
+
+
+def test_run_summary_model_dump_omits_none_label() -> None:
+    """RunSummary serialization must omit label if None."""
+    summary = RunSummary(
+        run_id="00000000-0000-4000-8000-000000000001",
+        status=RunStatus.queued,
+        stage=PublicStage.preparing,
+        created_at=datetime(2026, 9, 17, 10, 45, 5, tzinfo=UTC),
+        label=None,
+    )
+    dumped = summary.model_dump(mode="json")
+    assert "label" not in dumped
+
+
+def test_evidence_ref_model_dump_omits_none_fields() -> None:
+    """EvidenceRef serialization must omit optional fields when None."""
+    ev = EvidenceRef(
+        evidence_id="00000000-0000-4000-8000-000000000001",
+        snapshot_id="00000000-0000-4000-8000-000000000002",
+        kind=EvidenceKind.reading,
+        summary="Reading summary",
+        record_ids=["00000000-0000-4000-8000-000000000003"],
+        observed_at=None,
+        interval=None,
+        method_version=None,
+    )
+    dumped = ev.model_dump(mode="json")
+    assert "observed_at" not in dumped
+    assert "interval" not in dumped
+    assert "method_version" not in dumped
+    assert dumped["evidence_id"] == "00000000-0000-4000-8000-000000000001"
+
+
+def test_report_model_dump_omits_none_fields_in_evidence() -> None:
+    """Report.model_dump must omit optional None fields in evidence items."""
+    data = _make_valid_report()
+    data["evidence"][0]["observed_at"] = None
+    data["evidence"][0]["interval"] = None
+    data["evidence"][0]["method_version"] = None
+    report = Report.model_validate(data)
+    dumped = report.model_dump(mode="json")
+    ev_item = dumped["evidence"][0]
+    assert "observed_at" not in ev_item
+    assert "interval" not in ev_item
+    assert "method_version" not in ev_item
 
 

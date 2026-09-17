@@ -2,8 +2,8 @@
   "run_id": "8c0a2b91-4d1e-450a-9d21-f8a1e2b3c4d5",
   "status": "failed",
   "stage": "failed",
-  "created_at": "2026-09-17T10:00:00Z",
-  "completed_at": "2026-09-17T10:00:15Z",
+  "created_at": "2026-09-17T10:45:05Z",
+  "completed_at": "2026-09-17T10:45:20Z",
   "report_id": null,
   "review": null,
   "generation_mode": "bedrock",
@@ -14,8 +14,8 @@
       "event_id": "e1000000-0000-4000-8000-000000000001",
       "stage": "preparing",
       "tool_name": null,
-      "started_at": "2026-09-17T10:00:01Z",
-      "finished_at": "2026-09-17T10:00:02Z",
+      "started_at": "2026-09-17T10:45:06Z",
+      "finished_at": "2026-09-17T10:45:07Z",
       "status": "completed",
       "evidence_ids": []
     },
@@ -23,8 +23,8 @@
       "event_id": "e1000000-0000-4000-8000-000000000002",
       "stage": "detecting",
       "tool_name": null,
-      "started_at": "2026-09-17T10:00:02Z",
-      "finished_at": "2026-09-17T10:00:03Z",
+      "started_at": "2026-09-17T10:45:07Z",
+      "finished_at": "2026-09-17T10:45:08Z",
       "status": "completed",
       "evidence_ids": [
         "91000000-0000-4000-8000-000000000001"
@@ -34,8 +34,8 @@
       "event_id": "e1000000-0000-4000-8000-000000000003",
       "stage": "collecting_evidence",
       "tool_name": "get_door_events",
-      "started_at": "2026-09-17T10:00:03Z",
-      "finished_at": "2026-09-17T10:00:15Z",
+      "started_at": "2026-09-17T10:45:08Z",
+      "finished_at": "2026-09-17T10:45:20Z",
       "status": "failed",
       "evidence_ids": []
     }
@@ -47,6 +47,5 @@
     "request_id": "req-8c0a2b91-4d1e-450a-9d21-f8a1e2b3c4d5",
     "retryable": false
   },
-  "is_public_demo": false,
-  "label": null
+  "is_public_demo": false
 }

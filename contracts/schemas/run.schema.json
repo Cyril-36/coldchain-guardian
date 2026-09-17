@@ -1,24 +1,5 @@
 {
   "$defs": {
-    "ArtifactRef": {
-      "additionalProperties": false,
-      "properties": {
-        "key": {
-          "title": "Key",
-          "type": "string"
-        },
-        "sha256": {
-          "title": "Sha256",
-          "type": "string"
-        }
-      },
-      "required": [
-        "key",
-        "sha256"
-      ],
-      "title": "ArtifactRef",
-      "type": "object"
-    },
     "ErrorDetail": {
       "additionalProperties": false,
       "properties": {
@@ -145,7 +126,6 @@
           "type": "string"
         },
         "reviewed_at": {
-          "format": "date-time",
           "title": "Reviewed At",
           "type": "string"
         }
@@ -203,14 +183,12 @@
           "title": "Tool Name"
         },
         "started_at": {
-          "format": "date-time",
           "title": "Started At",
           "type": "string"
         },
         "finished_at": {
           "anyOf": [
             {
-              "format": "date-time",
               "type": "string"
             },
             {
@@ -263,14 +241,12 @@
       "$ref": "#/$defs/PublicStage"
     },
     "created_at": {
-      "format": "date-time",
       "title": "Created At",
       "type": "string"
     },
     "completed_at": {
       "anyOf": [
         {
-          "format": "date-time",
           "type": "string"
         },
         {
@@ -367,77 +343,6 @@
       ],
       "default": null,
       "title": "Label"
-    },
-    "snapshot_ref": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ArtifactRef"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null
-    },
-    "report_ref": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ArtifactRef"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null
-    },
-    "owner_sub": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Owner Sub"
-    },
-    "scenario_id": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Scenario Id"
-    },
-    "attempt_id": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Attempt Id"
-    },
-    "lease_expires_at": {
-      "anyOf": [
-        {
-          "format": "date-time",
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Lease Expires At"
     }
   },
   "required": [
