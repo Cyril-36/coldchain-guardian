@@ -9,11 +9,8 @@ describe("PrintableReport", () => {
     const text = JSON.stringify(children);
     expect(element.props.className).toBe("print-report");
     expect(element.props["aria-labelledby"]).toBe("print-report-title");
-    expect(text).toContain("Measurements");
-    expect(text).toContain("Investigation outcome");
-    expect(text).toContain("Evidence");
-    expect(text).toContain("Next checks");
-    expect(text).toContain("Limitations & verification");
-    expect(text).toContain("Operator review");
+    for (const section of ["Measurements", "Investigation outcome", "Evidence", "Next checks", "Limitations & verification", "Operator review"]) {
+      expect(text).toContain(section);
+    }
   });
 });
