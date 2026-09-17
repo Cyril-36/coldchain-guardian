@@ -1,5 +1,5 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { beginSignIn, completeSignIn, getStoredAccessToken, signOut as cognitoSignOut } from "./auth";
+import { createContext, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { beginSignIn, completeSignIn, getStoredAccessToken, getCurrentUser, signOut as cognitoSignOut } from "./auth";
 
 interface AuthContextValue {
   loading: boolean;
@@ -7,43 +7,42 @@ interface AuthContextValue {
   accessToken: string | null;
   error: Error | null;
   signIn: () => Promise<void>;
-  signOut: () => void;
+  signOut: () => Promise<void>;
   getAccessToken: () => Promise<string | null>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-function getAuthorizationCode() {
-  return new URLSearchParams(window.location.search).get("code");
+function hasAuthCallback() {
+  const params = new URLSearchParams(window.location.search);
+  return Boolean(params.get("code") || params.get("error"));
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [accessToken, setAccessToken] = useState<string | null>(() => getStoredAccessToken());
+  const [accessToken, setAccessToken] = useState<string | null>(null);
   const [error, setError] = useState<Error | null>(null);
-  const [loading, setLoading] = useState(Boolean(getAuthorizationCode()));
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const code = getAuthorizationCode();
-    if (!code) return;
-
     let cancelled = false;
-    void completeSignIn(code)
-      .then((token) => {
+    void (async () => {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        if (params.get("error")) throw new Error(params.get("error_description") ?? params.get("error") ?? "Sign-in failed");
+        const user = hasAuthCallback() ? await completeSignIn() : await getCurrentUser();
         if (!cancelled) {
-          setAccessToken(token);
+          setAccessToken(user && !user.expired ? user.access_token : null);
           setError(null);
         }
-      })
-      .catch((reason: unknown) => {
+      } catch (reason: unknown) {
         if (!cancelled) {
           setAccessToken(null);
           setError(reason instanceof Error ? reason : new Error("Sign-in failed"));
         }
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setLoading(false);
-      });
-
+      }
+    })();
     return () => { cancelled = true; };
   }, []);
 
@@ -52,28 +51,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await beginSignIn();
   }, []);
 
-  const signOut = useCallback(() => {
+  const signOut = useCallback(async () => {
     setAccessToken(null);
     setError(null);
-    cognitoSignOut();
+    await cognitoSignOut();
   }, []);
 
   const getAccessToken = useCallback(async () => {
-    const token = getStoredAccessToken();
+    const token = await getStoredAccessToken();
     if (token !== accessToken) setAccessToken(token);
     return token;
   }, [accessToken]);
 
-  const value = useMemo<AuthContextValue>(() => ({
-    loading,
-    authenticated: Boolean(accessToken),
-    accessToken,
-    error,
-    signIn,
-    signOut,
-    getAccessToken,
-  }), [accessToken, error, getAccessToken, loading, signIn, signOut]);
-
+  const value = useMemo<AuthContextValue>(() => ({ loading, authenticated: Boolean(accessToken), accessToken, error, signIn, signOut, getAccessToken }), [accessToken, error, getAccessToken, loading, signIn, signOut]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
