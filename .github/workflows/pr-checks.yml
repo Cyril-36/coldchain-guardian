@@ -1,0 +1,43 @@
+name: PR checks
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  repository-checks:
+    name: repository-checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check planning documents and links
+        run: python3 scripts/check_repo.py
+      - name: Backend checks, when backend exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f backend/pyproject.toml ]; then
+            python3 -m pip install -e 'backend[dev]'
+            python3 -m ruff check backend
+            python3 -m pytest backend/tests
+          else
+            echo 'Backend not implemented yet; skipped.'
+          fi
+      - name: Frontend checks, when frontend exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f apps/web/package.json ]; then
+            cd apps/web
+            npm ci
+            npm run lint
+            npm run typecheck
+            npm test -- --run
+            npm run build
+          else
+            echo 'Frontend not implemented yet; skipped.'
+          fi
