@@ -8,6 +8,8 @@ records outside the authorized snapshot.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
+from copy import deepcopy
 from datetime import datetime
 from typing import Any
 
@@ -96,6 +98,13 @@ class ToolContext:
     """Holds snapshot, measurements, and evidence registry for a single run.
 
     Enforces strict snapshot isolation, cutoff boundaries, and deterministic caching.
+
+    The context owns its data. The snapshot is validated, normalized and deep-copied
+    at construction, measurements are recomputed from that copy by the deterministic
+    detector, and every public accessor hands out a copy. Once a context exists, no
+    mutation — of the caller's original snapshot, of the snapshot or measurements this
+    context exposes, or of a dict a tool returned — can change the facts or the
+    EvidenceRef items it produces.
     """
 
     def __init__(
@@ -124,8 +133,10 @@ class ToolContext:
                     f"occurs after cutoff {snapshot.cutoff_at}"
                 )
 
-        clean = validate_snapshot(snapshot)
-        self.snapshot = clean
+        # Deep copy so the context owns its data outright: nothing the caller does to
+        # the snapshot it passed in can reach the facts computed below.
+        clean = validate_snapshot(snapshot).model_copy(deep=True)
+        self._snapshot = clean
         self.run_id = run_id
 
         # Deterministically compute expected measurements from core detector
@@ -162,7 +173,7 @@ class ToolContext:
 
         # Measurements always come from the deterministic detector, never from the
         # caller. Supplied values are only ever used to fail fast on a mismatch.
-        self.measurements = list(expected_measurements)
+        self._measurements: tuple[SensorMeasurement, ...] = tuple(expected_measurements)
 
         self._valid_record_ids: set[str] = {
             r.event_id for r in clean.readings
@@ -171,12 +182,47 @@ class ToolContext:
         self._evidence_registry: dict[str, EvidenceRef] = {}
         self._cache: dict[str, dict[str, Any]] = {}
 
+    # ── Public, read-only views ────────────────────────────────────────────
+    #
+    # These hand out defensive copies. A caller may inspect or even mutate what it
+    # receives; the canonical data behind ``_snapshot`` and ``_measurements``, and
+    # therefore every fact and EvidenceRef this context produces, is unaffected.
+    # Tools in this module read the canonical private attributes directly.
+
+    @property
+    def snapshot(self) -> Snapshot:
+        """A copy of the authorized snapshot. Mutating it does not affect evidence."""
+        return self._snapshot.model_copy(deep=True)
+
+    @property
+    def measurements(self) -> list[SensorMeasurement]:
+        """Copies of the detector measurements. Mutating them does not affect evidence."""
+        return [m.model_copy(deep=True) for m in self._measurements]
+
+    @property
+    def snapshot_id(self) -> str:
+        return self._snapshot.snapshot_id
+
+    @property
+    def cutoff_at(self) -> datetime:
+        return self._snapshot.cutoff_at
+
+    def cached(self, key: str, build: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+        """Return a copy of the cached result for *key*, building it on first use.
+
+        Copying on the way out means a caller that mutates a tool result cannot
+        corrupt what a later call to the same tool returns.
+        """
+        if key not in self._cache:
+            self._cache[key] = build()
+        return deepcopy(self._cache[key])
+
     def register_evidence(self, ref: EvidenceRef) -> None:
         """Register an evidence item, enforcing provenance, record ID, and cutoff checks."""
-        if ref.snapshot_id != self.snapshot.snapshot_id:
+        if ref.snapshot_id != self._snapshot.snapshot_id:
             raise ValueError(
                 f"Evidence {ref.evidence_id} snapshot_id ({ref.snapshot_id}) does not "
-                f"match context snapshot_id ({self.snapshot.snapshot_id})"
+                f"match context snapshot_id ({self._snapshot.snapshot_id})"
             )
 
         # Validate that all record_ids belong to the snapshot
@@ -187,26 +233,30 @@ class ToolContext:
                 )
 
         # Cutoff checks
-        if ref.observed_at is not None and ref.observed_at > self.snapshot.cutoff_at:
+        if ref.observed_at is not None and ref.observed_at > self._snapshot.cutoff_at:
             raise ValueError(
                 f"Evidence {ref.evidence_id} observed_at {ref.observed_at} "
-                f"exceeds cutoff {self.snapshot.cutoff_at}"
+                f"exceeds cutoff {self._snapshot.cutoff_at}"
             )
-        if ref.interval is not None and ref.interval.end_at > self.snapshot.cutoff_at:
+        if ref.interval is not None and ref.interval.end_at > self._snapshot.cutoff_at:
             raise ValueError(
                 f"Evidence {ref.evidence_id} interval end {ref.interval.end_at} "
-                f"exceeds cutoff {self.snapshot.cutoff_at}"
+                f"exceeds cutoff {self._snapshot.cutoff_at}"
             )
 
-        self._evidence_registry[ref.evidence_id] = ref
+        self._evidence_registry[ref.evidence_id] = ref.model_copy(deep=True)
 
     def get_evidence(self, evidence_id: str) -> EvidenceRef | None:
-        """Retrieve a registered evidence reference by ID."""
-        return self._evidence_registry.get(evidence_id)
+        """Retrieve a copy of a registered evidence reference by ID."""
+        ref = self._evidence_registry.get(evidence_id)
+        return ref.model_copy(deep=True) if ref is not None else None
 
     def all_evidence(self) -> list[EvidenceRef]:
-        """Return all registered evidence references sorted by evidence_id."""
-        return [self._evidence_registry[eid] for eid in sorted(self._evidence_registry.keys())]
+        """Return copies of all registered evidence references, sorted by evidence_id."""
+        return [
+            self._evidence_registry[eid].model_copy(deep=True)
+            for eid in sorted(self._evidence_registry.keys())
+        ]
 
     def all_evidence_ids(self) -> set[str]:
         """Return set of all registered evidence IDs."""
@@ -218,27 +268,31 @@ class ToolContext:
 
 def get_excursion_summary(ctx: ToolContext) -> dict[str, Any]:
     """Return verified per-sensor metrics, coverage, and deterministic evidence."""
-    if "excursion_summary" in ctx._cache:
-        return ctx._cache["excursion_summary"]
+    def build() -> dict[str, Any]:
+        return _build_excursion_summary(ctx)
 
+    return ctx.cached("excursion_summary", build)
+
+
+def _build_excursion_summary(ctx: ToolContext) -> dict[str, Any]:
     # Register measurement evidence from detector
     detector_refs = build_measurement_evidence(
-        ctx.snapshot, ctx.measurements, policy=ctx.snapshot.policy
+        ctx._snapshot, ctx._measurements, policy=ctx._snapshot.policy
     )
     for ref in detector_refs:
         ctx.register_evidence(ref)
 
     sensor_summaries: list[dict[str, Any]] = []
-    sensors_by_id = {s.sensor_id: s for s in ctx.snapshot.sensors}
+    sensors_by_id = {s.sensor_id: s for s in ctx._snapshot.sensors}
 
-    for m in ctx.measurements:
+    for m in ctx._measurements:
         sensor = sensors_by_id.get(m.sensor_id)
         if sensor is None:
             raise ValueError(f"Measurement references unknown sensor: {m.sensor_id}")
         role_str = sensor.role.value
         placement_str = sensor.placement
         ev_id = m.evidence_ids[0] if m.evidence_ids else str(
-            uuid.uuid5(uuid.UUID(ctx.snapshot.snapshot_id), f"measurement:{m.sensor_id}")
+            uuid.uuid5(uuid.UUID(ctx._snapshot.snapshot_id), f"measurement:{m.sensor_id}")
         )
 
         sensor_summaries.append(
@@ -275,7 +329,6 @@ def get_excursion_summary(ctx: ToolContext) -> dict[str, Any]:
         "has_excursion": has_excursion,
         "evidence_ids": [s["evidence_id"] for s in sensor_summaries],
     }
-    ctx._cache["excursion_summary"] = result
     return result
 
 
@@ -286,20 +339,24 @@ def get_sensor_comparison(ctx: ToolContext) -> dict[str, Any]:
     Where observations cannot support comparison, returns insufficient/unaligned evidence
     rather than a confirmed disagreement. Evidence intervals describe only readings actually used.
     """
-    if "sensor_comparison" in ctx._cache:
-        return ctx._cache["sensor_comparison"]
+    def build() -> dict[str, Any]:
+        return _build_sensor_comparison(ctx)
 
+    return ctx.cached("sensor_comparison", build)
+
+
+def _build_sensor_comparison(ctx: ToolContext) -> dict[str, Any]:
     ref_sensor = next(
-        (s for s in ctx.snapshot.sensors if s.role == SensorRole.reference),
+        (s for s in ctx._snapshot.sensors if s.role == SensorRole.reference),
         None,
     )
     if ref_sensor is None:
         raise ValueError("Snapshot does not contain a configured reference sensor")
 
-    cmp_sensors = [s for s in ctx.snapshot.sensors if s.role == SensorRole.comparison]
+    cmp_sensors = [s for s in ctx._snapshot.sensors if s.role == SensorRole.comparison]
 
     readings_by_sensor: dict[str, list[Reading]] = {}
-    for r in ctx.snapshot.readings:
+    for r in ctx._snapshot.readings:
         readings_by_sensor.setdefault(r.sensor_id, []).append(r)
 
     ref_readings = sorted(
@@ -310,7 +367,7 @@ def get_sensor_comparison(ctx: ToolContext) -> dict[str, Any]:
     comparisons: list[dict[str, Any]] = []
     max_alignment_seconds = min(
         MAX_ALIGNMENT_OFFSET_SECONDS,
-        ctx.snapshot.policy.expected_interval_seconds / 2.0,
+        ctx._snapshot.policy.expected_interval_seconds / 2.0,
     )
 
     for cmp_sensor in cmp_sensors:
@@ -321,7 +378,7 @@ def get_sensor_comparison(ctx: ToolContext) -> dict[str, Any]:
 
         ev_id = str(
             uuid.uuid5(
-                uuid.UUID(ctx.snapshot.snapshot_id),
+                uuid.UUID(ctx._snapshot.snapshot_id),
                 f"comparison:{ref_sensor.sensor_id}:{cmp_sensor.sensor_id}",
             )
         )
@@ -335,7 +392,7 @@ def get_sensor_comparison(ctx: ToolContext) -> dict[str, Any]:
             )
             ref = EvidenceRef(
                 evidence_id=ev_id,
-                snapshot_id=ctx.snapshot.snapshot_id,
+                snapshot_id=ctx._snapshot.snapshot_id,
                 kind=EvidenceKind.derived_metric,
                 record_ids=[],
                 interval=None,
@@ -407,7 +464,7 @@ def get_sensor_comparison(ctx: ToolContext) -> dict[str, Any]:
             )
             ref = EvidenceRef(
                 evidence_id=ev_id,
-                snapshot_id=ctx.snapshot.snapshot_id,
+                snapshot_id=ctx._snapshot.snapshot_id,
                 kind=EvidenceKind.derived_metric,
                 record_ids=[],
                 interval=None,
@@ -454,7 +511,7 @@ def get_sensor_comparison(ctx: ToolContext) -> dict[str, Any]:
 
         ref = EvidenceRef(
             evidence_id=ev_id,
-            snapshot_id=ctx.snapshot.snapshot_id,
+            snapshot_id=ctx._snapshot.snapshot_id,
             kind=EvidenceKind.derived_metric,
             record_ids=record_ids,
             interval=interval,
@@ -491,9 +548,7 @@ def get_sensor_comparison(ctx: ToolContext) -> dict[str, Any]:
             }
         )
 
-    result = {"comparisons": comparisons, "count": len(comparisons)}
-    ctx._cache["sensor_comparison"] = result
-    return result
+    return {"comparisons": comparisons, "count": len(comparisons)}
 
 
 def _get_events_by_type(
@@ -507,10 +562,18 @@ def _get_events_by_type(
     Explicitly marks missing data rather than hallucinating default states.
     Bounds returned model-facing events while preserving total count and evidence IDs.
     """
-    if cache_key in ctx._cache:
-        return ctx._cache[cache_key]
+    def build() -> dict[str, Any]:
+        return _build_events_by_type(ctx, event_type, event_label)
 
-    events = [e for e in ctx.snapshot.events if e.event_type == event_type]
+    return ctx.cached(cache_key, build)
+
+
+def _build_events_by_type(
+    ctx: ToolContext,
+    event_type: EventType,
+    event_label: str,
+) -> dict[str, Any]:
+    events = [e for e in ctx._snapshot.events if e.event_type == event_type]
     events.sort(key=lambda e: (e.observed_at, e.event_id))
 
     if not events:
@@ -524,18 +587,17 @@ def _get_events_by_type(
             "summary": f"No {event_label.replace('_', ' ')} events observed in snapshot.",
             "evidence_ids": [],
         }
-        ctx._cache[cache_key] = result
         return result
 
     result_events: list[dict[str, Any]] = []
     for e in events:
         ev_id = str(
-            uuid.uuid5(uuid.UUID(ctx.snapshot.snapshot_id), f"event:{e.event_id}")
+            uuid.uuid5(uuid.UUID(ctx._snapshot.snapshot_id), f"event:{e.event_id}")
         )
         time_str = _iso_z(e.observed_at)
         ref = EvidenceRef(
             evidence_id=ev_id,
-            snapshot_id=ctx.snapshot.snapshot_id,
+            snapshot_id=ctx._snapshot.snapshot_id,
             kind=EvidenceKind.event,
             record_ids=[e.event_id],
             observed_at=e.observed_at,
@@ -563,7 +625,6 @@ def _get_events_by_type(
         "status": "observed",
         "evidence_ids": [ev["evidence_id"] for ev in result_events],
     }
-    ctx._cache[cache_key] = result
     return result
 
 
@@ -767,14 +828,14 @@ def _compute_door_temporal_facts(
         return None
 
     ref_sensor = next(
-        (s for s in ctx.snapshot.sensors if s.role == SensorRole.reference),
+        (s for s in ctx._snapshot.sensors if s.role == SensorRole.reference),
         None,
     )
     if ref_sensor is None:
         return None
 
     ref_measurement = next(
-        (m for m in ctx.measurements if m.sensor_id == ref_sensor.sensor_id),
+        (m for m in ctx._measurements if m.sensor_id == ref_sensor.sensor_id),
         None,
     )
     if ref_measurement is None:
@@ -805,10 +866,10 @@ def _compute_door_temporal_facts(
         }
 
     # Reference readings
-    ref_readings = [r for r in ctx.snapshot.readings if r.sensor_id == ref_sensor.sensor_id]
+    ref_readings = [r for r in ctx._snapshot.readings if r.sensor_id == ref_sensor.sensor_id]
     ref_readings.sort(key=lambda r: (r.observed_at, r.event_id))
 
-    policy = ctx.snapshot.policy
+    policy = ctx._snapshot.policy
     valid_intervals = _get_valid_excursion_intervals(ref_readings, policy)
     covered_spans = _covered_spans(ref_readings, policy)
 
@@ -904,7 +965,7 @@ def _compute_door_temporal_facts(
             terminating_event,
             close_event,
             door_state_unknown_until,
-        ) = _confirmed_open_window(open_event, sorted_door_events, ctx.snapshot.cutoff_at)
+        ) = _confirmed_open_window(open_event, sorted_door_events, ctx._snapshot.cutoff_at)
 
         if terminating_event is not None:
             used_record_ids.add(terminating_event.event_id)
@@ -1099,7 +1160,7 @@ def _compute_door_temporal_facts(
     parts.append("Temporal association observed; does not establish causation.")
     summary = " ".join(parts)
 
-    ev_id = str(uuid.uuid5(uuid.UUID(ctx.snapshot.snapshot_id), "door_temporal_facts"))
+    ev_id = str(uuid.uuid5(uuid.UUID(ctx._snapshot.snapshot_id), "door_temporal_facts"))
     sorted_times = sorted(used_timestamps)
     interval = (
         EvidenceInterval(start_at=sorted_times[0], end_at=sorted_times[-1])
@@ -1109,7 +1170,7 @@ def _compute_door_temporal_facts(
 
     ref = EvidenceRef(
         evidence_id=ev_id,
-        snapshot_id=ctx.snapshot.snapshot_id,
+        snapshot_id=ctx._snapshot.snapshot_id,
         kind=EvidenceKind.derived_metric,
         record_ids=sorted(list(used_record_ids)),
         interval=interval,
@@ -1150,16 +1211,21 @@ def get_door_events(ctx: ToolContext) -> dict[str, Any]:
     Never turns missing door events into 'closed'. Includes deterministic temporal facts
     (door open before rise, overlap duration, recovery after close) without claiming causation.
     """
-    if "door_events" in ctx._cache:
-        return ctx._cache["door_events"]
+    def build() -> dict[str, Any]:
+        return _build_door_events(ctx)
 
+    return ctx.cached("door_events", build)
+
+
+def _build_door_events(ctx: ToolContext) -> dict[str, Any]:
+    # _get_events_by_type already returns a copy, so mutating `raw` here cannot
+    # disturb the cached door_events_raw entry.
     raw = _get_events_by_type(ctx, EventType.door_state, "door_events_raw", "door")
     if raw["is_missing"]:
         raw["temporal_facts"] = None
-        ctx._cache["door_events"] = raw
         return raw
 
-    door_events_list = [e for e in ctx.snapshot.events if e.event_type == EventType.door_state]
+    door_events_list = [e for e in ctx._snapshot.events if e.event_type == EventType.door_state]
     temporal_facts = _compute_door_temporal_facts(ctx, door_events_list)
     raw["temporal_facts"] = temporal_facts
     if (
@@ -1169,7 +1235,6 @@ def get_door_events(ctx: ToolContext) -> dict[str, Any]:
     ):
         raw["evidence_ids"].append(temporal_facts["evidence_id"])
 
-    ctx._cache["door_events"] = raw
     return raw
 
 
@@ -1184,7 +1249,7 @@ def get_refrigeration_events(ctx: ToolContext) -> dict[str, Any]:
     )
     if not res["is_missing"]:
         all_refrig = [
-            e for e in ctx.snapshot.events if e.event_type == EventType.refrigeration_state
+            e for e in ctx._snapshot.events if e.event_type == EventType.refrigeration_state
         ]
         res["has_fault_or_stopped"] = any(
             e.value in (RefrigerationState.fault, RefrigerationState.stopped)
@@ -1205,14 +1270,18 @@ def get_vehicle_events(ctx: ToolContext) -> dict[str, Any]:
 
 def get_handling_policy(ctx: ToolContext) -> dict[str, Any]:
     """Return the exact configured policy parameters and frozen policy evidence."""
-    if "handling_policy" in ctx._cache:
-        return ctx._cache["handling_policy"]
+    def build() -> dict[str, Any]:
+        return _build_handling_policy(ctx)
 
-    p = ctx.snapshot.policy
-    ev_id = str(uuid.uuid5(uuid.UUID(ctx.snapshot.snapshot_id), "policy"))
+    return ctx.cached("handling_policy", build)
+
+
+def _build_handling_policy(ctx: ToolContext) -> dict[str, Any]:
+    p = ctx._snapshot.policy
+    ev_id = str(uuid.uuid5(uuid.UUID(ctx._snapshot.snapshot_id), "policy"))
     ref = EvidenceRef(
         evidence_id=ev_id,
-        snapshot_id=ctx.snapshot.snapshot_id,
+        snapshot_id=ctx._snapshot.snapshot_id,
         kind=EvidenceKind.policy,
         record_ids=[],
         summary=(
@@ -1231,5 +1300,4 @@ def get_handling_policy(ctx: ToolContext) -> dict[str, Any]:
         "max_gap_seconds": p.max_gap_seconds,
         "evidence_id": ev_id,
     }
-    ctx._cache["handling_policy"] = result
     return result

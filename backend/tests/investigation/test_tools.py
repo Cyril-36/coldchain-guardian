@@ -9,6 +9,7 @@ import pytest
 
 from coldchain.contracts.enums import (
     Assessment,
+    CoverageStatus,
     EventType,
     EvidenceKind,
     GenerationMode,
@@ -230,16 +231,28 @@ def test_tool_context_register_evidence_cutoff_violation_rejected():
 
 
 def test_tool_context_caching():
+    """Repeated tool calls are deterministic, and each returns an independent copy."""
     snap = _make_snapshot()
     ctx = ToolContext(snap)
 
     res1 = get_excursion_summary(ctx)
     res2 = get_excursion_summary(ctx)
-    assert res1 is res2
+    assert res1 == res2
+    # Deliberately not the same object: handing out the cached dict would let a
+    # caller mutating a tool result corrupt every later call.
+    assert res1 is not res2
 
     pol1 = get_handling_policy(ctx)
     pol2 = get_handling_policy(ctx)
-    assert pol1 is pol2
+    assert pol1 == pol2
+    assert pol1 is not pol2
+
+    # Mutating a returned result does not reach the cache.
+    res1["has_excursion"] = "tampered"
+    res1["sensors"].clear()
+    pol1["min_c"] = -273.0
+    assert get_excursion_summary(ctx) == res2
+    assert get_handling_policy(ctx) == pol2
 
 
 # ── Excursion Summary Tests ─────────────────────────────────────────────────
@@ -1498,3 +1511,238 @@ def test_final_reading_still_out_of_range_is_not_a_recovery():
     assert tf["recovery_status"] == "not_established"
     assert tf["recovery_reason"] == "observed_coverage_ends_while_still_out_of_range"
     assert "did not recover" not in tf["summary"]
+
+
+# ── Regression: the context owns its data ──────────────────────────────────
+
+
+def _all_tool_results(ctx: ToolContext) -> dict[str, object]:
+    """Call every read-only tool and return their results plus the evidence registry."""
+    return {
+        "excursion": get_excursion_summary(ctx),
+        "comparison": get_sensor_comparison(ctx),
+        "door": get_door_events(ctx),
+        "refrigeration": get_refrigeration_events(ctx),
+        "vehicle": get_vehicle_events(ctx),
+        "policy": get_handling_policy(ctx),
+        "evidence": [e.model_dump(mode="json") for e in ctx.all_evidence()],
+    }
+
+
+def _assert_cutoff_bound(ctx: ToolContext, cutoff: datetime) -> None:
+    """Every registered evidence item stays inside the authorized snapshot and cutoff."""
+    snapshot_id = ctx.snapshot.snapshot_id
+    valid_records = {r.event_id for r in ctx.snapshot.readings} | {
+        e.event_id for e in ctx.snapshot.events
+    }
+    evidence = ctx.all_evidence()
+    assert evidence, "expected the tools to have registered evidence"
+    for ev in evidence:
+        assert ev.snapshot_id == snapshot_id
+        assert set(ev.record_ids) <= valid_records
+        if ev.observed_at is not None:
+            assert ev.observed_at <= cutoff
+        if ev.interval is not None:
+            assert ev.interval.end_at <= cutoff
+
+
+def test_mutating_the_original_snapshot_after_construction_cannot_alter_evidence():
+    """The context deep-copies its snapshot, so the caller's object is disconnected.
+
+    Appending an out-of-cutoff reading and a foreign event to the snapshot that was
+    passed in, and editing a reading in place, must leave every tool result and every
+    EvidenceRef exactly as it was at construction.
+    """
+    snap = _make_snapshot(cutoff_seconds=600)
+    ctx = ToolContext(snap)
+    before = _all_tool_results(ctx)
+    cutoff = ctx.snapshot.cutoff_at
+
+    # Push data past the cutoff into the caller's snapshot, after construction.
+    snap.readings.append(
+        Reading(
+            event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, "tamper.reading")),
+            sensor_id=snap.sensors[0].sensor_id,
+            observed_at=_ts(5000),
+            temperature_c=99.0,
+        )
+    )
+    snap.events.append(
+        Event(
+            event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, "tamper.event")),
+            observed_at=_ts(5000),
+            event_type=EventType.door_state,
+            value="open",
+            source="tampered",
+        )
+    )
+    # And edit an existing reading in place.
+    snap.readings[0].temperature_c = -40.0
+    snap.policy.max_c = -10.0
+
+    after = _all_tool_results(ctx)
+    assert after == before
+    _assert_cutoff_bound(ctx, cutoff)
+
+    # The tampered records never became part of the authorized evidence base.
+    registered_records = {rec for e in ctx.all_evidence() for rec in e.record_ids}
+    assert str(uuid.uuid5(uuid.NAMESPACE_DNS, "tamper.reading")) not in registered_records
+    assert str(uuid.uuid5(uuid.NAMESPACE_DNS, "tamper.event")) not in registered_records
+    assert ctx.snapshot.policy.max_c == 8.0
+
+
+def test_mutating_the_exposed_snapshot_and_measurements_cannot_alter_evidence():
+    """`ctx.snapshot` and `ctx.measurements` hand out copies, not the canonical data."""
+    snap = _make_snapshot(cutoff_seconds=600)
+    ctx = ToolContext(snap)
+    before = _all_tool_results(ctx)
+    cutoff = ctx.snapshot.cutoff_at
+
+    # Mutate a reading reached through the exposed snapshot.
+    exposed = ctx.snapshot
+    exposed.readings[0].temperature_c = -40.0
+    exposed.readings.append(
+        Reading(
+            event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, "tamper.exposed")),
+            sensor_id=exposed.sensors[0].sensor_id,
+            observed_at=_ts(5000),
+            temperature_c=99.0,
+        )
+    )
+    exposed.cutoff_at = _ts(99999)
+
+    # Mutate a measurement reached through the exposed measurements.
+    measurements = ctx.measurements
+    measurements[0].estimated_out_of_range_seconds = 123456.0
+    measurements[0].coverage_status = CoverageStatus.complete
+    measurements.clear()
+
+    after = _all_tool_results(ctx)
+    assert after == before
+    _assert_cutoff_bound(ctx, cutoff)
+
+    # A fresh read still shows the canonical values, not the tampered ones.
+    assert ctx.snapshot.cutoff_at == cutoff
+    assert len(ctx.snapshot.readings) == len(snap.readings)
+    assert ctx.measurements[0].estimated_out_of_range_seconds != 123456.0
+    assert len(ctx.measurements) == len(ctx.snapshot.sensors)
+
+
+def test_mutating_a_returned_evidence_ref_cannot_alter_the_registry():
+    """Evidence accessors hand out copies of the frozen references."""
+    snap = _make_snapshot(cutoff_seconds=600)
+    ctx = ToolContext(snap)
+    get_excursion_summary(ctx)
+
+    original = ctx.all_evidence()[0]
+    tampered = ctx.get_evidence(original.evidence_id)
+    assert tampered is not None
+    tampered.record_ids.append("not-a-record")
+    tampered.summary = "tampered"
+
+    refetched = ctx.get_evidence(original.evidence_id)
+    assert refetched is not None
+    assert refetched.summary == original.summary
+    assert "not-a-record" not in refetched.record_ids
+
+
+def test_mutation_before_any_tool_call_cannot_alter_derived_facts():
+    """Mutate before the cache is warm, so the deep copy is what is under test.
+
+    Calling a tool first would let the cache mask a missing copy. Here the context is
+    tampered with immediately after construction and before any tool runs, then
+    compared against a pristine control built from the same inputs.
+    """
+
+    def build() -> Snapshot:
+        return _ref_only_snapshot(
+            temps=[(0, 5.0), (60, 9.0), (90, 9.0), (120, 5.0)],
+            door=[(30, "open"), (90, "closed")],
+            cutoff_seconds=300,
+        )
+
+    control = _all_tool_results(ToolContext(build()))
+
+    snap = build()
+    ctx = ToolContext(snap)
+
+    # No tool has run yet: nothing is cached.
+    snap.readings[-1].temperature_c = 50.0  # the reading that establishes recovery
+    snap.policy.max_c = 100.0  # would erase the excursion entirely
+    ctx.snapshot.readings[-1].temperature_c = 50.0
+    ctx.measurements[0].estimated_out_of_range_seconds = 0.0
+
+    assert _all_tool_results(ctx) == control
+
+    facts = get_door_events(ctx)["temporal_facts"]
+    assert facts is not None
+    assert facts["recovery_status"] == "recovered"
+    assert get_excursion_summary(ctx)["has_excursion"] is True
+    _assert_cutoff_bound(ctx, ctx.snapshot.cutoff_at)
+
+
+@pytest.mark.parametrize(
+    ("label", "ref_points", "cmp_points"),
+    [
+        ("trailing_unaligned", [(0, 5.0), (60, 5.0)], [(0, 5.2), (60, 5.3), (300, 5.0)]),
+        ("leading_unaligned", [(300, 5.0), (360, 5.0)], [(0, 5.2), (300, 5.3), (360, 5.0)]),
+        ("middle_unaligned", [(0, 5.0), (600, 5.0)], [(0, 5.2), (300, 9.0), (600, 5.1)]),
+        ("both_ends_unaligned", [(300, 5.0)], [(0, 5.0), (300, 5.2), (900, 5.0)]),
+        ("reference_extra_unaligned", [(0, 5.0), (300, 5.0), (600, 5.0)], [(0, 5.2)]),
+    ],
+)
+def test_comparison_interval_is_always_bounded_by_its_cited_records(
+    label: str,
+    ref_points: list[tuple[int, float]],
+    cmp_points: list[tuple[int, float]],
+):
+    """A comparison interval must never span beyond the records it cites.
+
+    An interval wider than its `record_ids` invites a consumer to read the evidence
+    as covering a period those records do not support. Checked across several
+    alignment shapes, including unaligned readings leading, trailing and in the
+    middle of the series.
+    """
+    ref_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, "sensor.ref"))
+    cmp_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, "sensor.cmp"))
+    readings = [
+        Reading(
+            event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{label}.ref.{offset}")),
+            sensor_id=ref_id,
+            observed_at=_ts(offset),
+            temperature_c=temp,
+        )
+        for offset, temp in ref_points
+    ] + [
+        Reading(
+            event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{label}.cmp.{offset}")),
+            sensor_id=cmp_id,
+            observed_at=_ts(offset),
+            temperature_c=temp,
+        )
+        for offset, temp in cmp_points
+    ]
+    snap = _make_snapshot(
+        readings=readings,
+        sensors=[
+            Sensor(sensor_id=ref_id, placement="center", role=SensorRole.reference),
+            Sensor(sensor_id=cmp_id, placement="door", role=SensorRole.comparison),
+        ],
+        events=[],
+        cutoff_seconds=5000,
+    )
+    ctx = ToolContext(snap)
+    observed_at_by_id = {r.event_id: r.observed_at for r in ctx.snapshot.readings}
+
+    comparisons = get_sensor_comparison(ctx)["comparisons"]
+    assert comparisons
+    for comp in comparisons:
+        ev = ctx.get_evidence(comp["evidence_id"])
+        assert ev is not None
+        if ev.interval is None:
+            assert ev.record_ids == []
+            continue
+        cited_times = [observed_at_by_id[rec_id] for rec_id in ev.record_ids]
+        assert cited_times, "an interval must cite the records it is built from"
+        assert ev.interval.start_at == min(cited_times)
+        assert ev.interval.end_at == max(cited_times)
