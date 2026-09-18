@@ -245,6 +245,9 @@ def main() -> int:
 
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_dir = Path(args.out) if args.out else REPO_ROOT / "eval" / "reports" / stamp
+    if out_dir.exists() and any(out_dir.iterdir()):
+        print(f"output directory is not empty: {out_dir}", file=sys.stderr)
+        return 2
     outputs_dir = out_dir / "outputs"
     outputs_dir.mkdir(parents=True, exist_ok=True)
 

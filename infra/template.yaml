@@ -147,8 +147,6 @@ Resources:
         DefaultAuthorizer: OperatorJwt
         Authorizers:
           OperatorJwt:
-            AuthorizationScopes:
-              - coldchain/write
             JwtConfiguration:
               issuer: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${OperatorPool}
               audience:
@@ -201,6 +199,24 @@ Resources:
             ApiId: !Ref HttpApi
             Path: /v1/{proxy+}
             Method: ANY
+        CreateRun:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /v1/runs
+            Method: POST
+            Auth:
+              AuthorizationScopes:
+                - coldchain/write
+        ReviewRun:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /v1/runs/{run_id}/review
+            Method: POST
+            Auth:
+              AuthorizationScopes:
+                - coldchain/write
         Health:
           Type: HttpApi
           Properties:
@@ -215,8 +231,6 @@ Resources:
             ApiId: !Ref HttpApi
             Path: /v1/scenarios
             Method: GET
-            Auth:
-              Authorizer: NONE
         DemoList:
           Type: HttpApi
           Properties:
@@ -266,6 +280,7 @@ Resources:
                 - dynamodb:GetItem
                 - dynamodb:PutItem
                 - dynamodb:UpdateItem
+                - dynamodb:DeleteItem
               Resource: !GetAtt RunTable.Arn
             - Effect: Allow
               Action:
@@ -274,6 +289,12 @@ Resources:
               Resource:
                 - !Sub ${ArtifactBucket.Arn}/snapshots/*
                 - !Sub ${ArtifactBucket.Arn}/reports/*
+            - Effect: Allow
+              Action:
+                - sqs:ReceiveMessage
+                - sqs:DeleteMessage
+                - sqs:GetQueueAttributes
+              Resource: !GetAtt InvestigationQueue.Arn
             # Granted only when Bedrock is enabled: the deterministic default must
             # not ship a permission it cannot use.
             #

@@ -103,8 +103,11 @@ def verify_proposal(proposal: InvestigationProposal, ctx: ToolContext) -> list[s
     if proposal.outcome == Outcome.hypothesis_supported:
         if len(supported) != 1 or proposal.primary_hypothesis != supported[0].hypothesis:
             errors.append("primary hypothesis must be the single supported hypothesis")
-    elif proposal.primary_hypothesis is not None:
-        errors.append("unresolved proposal cannot have a primary hypothesis")
+    else:
+        if proposal.primary_hypothesis is not None:
+            errors.append("unresolved proposal cannot have a primary hypothesis")
+        if supported:
+            errors.append("unresolved proposal cannot contain a supported hypothesis")
 
     if (
         sum((door_supported, refrigeration_possible, disagreement_supported)) > 1

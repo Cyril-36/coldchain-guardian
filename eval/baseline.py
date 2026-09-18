@@ -18,7 +18,6 @@ from __future__ import annotations
 from coldchain.contracts.enums import Assessment, HypothesisType, Outcome
 from coldchain.investigation.tools import (
     ToolContext,
-    event_evidence_id,
     get_door_events,
     get_excursion_summary,
     get_refrigeration_events,
@@ -32,10 +31,7 @@ def baseline_proposal(ctx: ToolContext) -> InvestigationProposal:
     summary = get_excursion_summary(ctx)
     door = get_door_events(ctx)
     comparison = get_sensor_comparison(ctx)
-    # Called for its side effect: it registers evidence for every refrigeration event,
-    # so the IDs cited below exist in the registry the verifier checks against. The
-    # returned page is capped, so fault IDs are derived from the snapshot instead.
-    get_refrigeration_events(ctx)
+    refrigeration = get_refrigeration_events(ctx)
 
     reference_ids = [
         sensor["evidence_id"]
@@ -46,14 +42,12 @@ def baseline_proposal(ctx: ToolContext) -> InvestigationProposal:
         sensor["evidence_id"] for sensor in summary["sensors"] if sensor["excursion_detected"]
     ]
     open_ids = [
-        event_evidence_id(ctx, event.event_id)
-        for event in ctx.snapshot.events
-        if event.event_type == "door_state" and event.value == "open"
+        event["evidence_id"] for event in door["events"] if event["value"] == "open"
     ]
     fault_ids = [
-        event_evidence_id(ctx, event.event_id)
-        for event in ctx.snapshot.events
-        if event.event_type == "refrigeration_state" and event.value in {"fault", "stopped"}
+        event["evidence_id"]
+        for event in refrigeration["events"]
+        if event["value"] in {"fault", "stopped"}
     ]
     disagreement_ids = [
         item["evidence_id"]
@@ -86,7 +80,8 @@ def baseline_proposal(ctx: ToolContext) -> InvestigationProposal:
     winners = [kind for kind, hit in matched if hit]
 
     # More than one rule firing means the observations cannot separate explanations.
-    single = winners[0] if len(winners) == 1 else None
+    hidden_fault_possible = refrigeration["has_fault_or_stopped"] and not fault_ids
+    single = winners[0] if len(winners) == 1 and not hidden_fault_possible else None
 
     for kind, hit in matched:
         if kind == HypothesisType.door_exposure:

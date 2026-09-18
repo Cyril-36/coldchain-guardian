@@ -83,6 +83,21 @@ def test_cited_door_proposal_passes_without_model_authored_numbers() -> None:
     assert "causation is not proven" in report.hypotheses[0].explanation
 
 
+def test_unresolved_proposal_cannot_embed_a_supported_hypothesis() -> None:
+    def contradictory(ctx):
+        proposal = _door_proposal(ctx)
+        proposal.outcome = Outcome.unresolved
+        proposal.primary_hypothesis = None
+        return proposal
+
+    report = investigate(_snapshot("door_exposure"), str(uuid4()), contradictory, model_id="model")
+
+    assert report.outcome == Outcome.unresolved
+    assert report.verification.status == "blocked"
+    assert report.hypotheses == []
+    assert any("unresolved" in error for error in report.verification.errors)
+
+
 def test_unknown_evidence_blocks_model_proposal_and_hides_its_claim() -> None:
     def invented(ctx):
         proposal = _door_proposal(ctx)

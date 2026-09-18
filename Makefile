@@ -30,10 +30,11 @@ eval-offline: ## Frozen holdout set against the rule baseline; no model calls
 	$(PY) scripts/run_eval.py --proposer baseline
 
 eval-bedrock: ## Bounded live-model evaluation; must be enabled explicitly
-	@test -n "$(EVAL_BEDROCK)" || { echo 'Refusing to spend model calls. Re-run with EVAL_BEDROCK=1'; exit 1; }
+	@test "$(EVAL_BEDROCK)" = "1" || { echo 'Refusing to spend model calls. Re-run with EVAL_BEDROCK=1'; exit 1; }
 	@test -n "$(REGION)" || { echo 'Set AWS_REGION'; exit 1; }
 	@test -n "$(MODEL)" || { echo 'Set BEDROCK_MODEL_ID'; exit 1; }
 	$(PY) scripts/probe_bedrock.py --region "$(REGION)" --model-id "$(MODEL)"
+	$(PY) scripts/run_eval.py --proposer bedrock --region "$(REGION)" --model-id "$(MODEL)"
 
 probe-bedrock: ## One bounded tool-call and structured-output probe
 	$(PY) scripts/probe_bedrock.py --region "$(REGION)" --model-id "$(MODEL)"

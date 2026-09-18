@@ -5,7 +5,7 @@ docs/01-CYRIL.md requires proving the chosen model can call a tool and return a
 schema-valid object from the deployment identity before the investigator is trusted.
 A plain "hello" response is not sufficient evidence.
 
-This makes exactly one model invocation with a small token budget. It prints the
+This makes one bounded agent invocation with a small token budget. It prints the
 model ID, region, package versions and latency, and never prints the prompt, the
 model's free text, or any credential.
 """
@@ -19,7 +19,7 @@ import os
 import sys
 import time
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 
 class ProbeResult(BaseModel):
@@ -94,13 +94,18 @@ def main() -> int:
         return 1
     latency_s = round(time.monotonic() - started, 2)
 
-    structured = ProbeResult.model_validate(result.structured_output)
+    try:
+        structured = ProbeResult.model_validate(result.structured_output)
+    except ValidationError:
+        print(json.dumps({"ok": False, "failure": "structured_output_invalid", "model_id": args.model_id, "region": args.region}))
+        return 1
+    ok = calls == ["get_probe_token"] and structured.tool_was_called and structured.tool_value == "coldchain-probe-ok"
     usage = getattr(getattr(result, "metrics", None), "accumulated_usage", None) or {}
 
     print(
         json.dumps(
             {
-                "ok": bool(calls) and structured.tool_value == "coldchain-probe-ok",
+                "ok": ok,
                 "model_id": args.model_id,
                 "region": args.region,
                 "tool_calls": calls,
@@ -118,7 +123,7 @@ def main() -> int:
             indent=2,
         )
     )
-    return 0 if calls and structured.tool_value == "coldchain-probe-ok" else 1
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
