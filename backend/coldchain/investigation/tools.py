@@ -27,6 +27,7 @@ from coldchain.contracts.schemas import (
 from coldchain.core.detector import (
     build_measurement_evidence,
     detect_excursions,
+    validate_snapshot,
 )
 
 TOOLS_VERSION = "1.0.0"
@@ -69,13 +70,14 @@ class ToolContext:
                     f"occurs after cutoff {snapshot.cutoff_at}"
                 )
 
-        self.snapshot = snapshot
+        clean = validate_snapshot(snapshot)
+        self.snapshot = clean
         self.run_id = run_id
 
         # Deterministically compute expected measurements from core detector
-        expected_measurements = detect_excursions(snapshot, snapshot.policy)
+        expected_measurements = detect_excursions(clean, clean.policy)
         expected_by_sensor = {m.sensor_id: m for m in expected_measurements}
-        configured_sensor_ids = {s.sensor_id for s in snapshot.sensors}
+        configured_sensor_ids = {s.sensor_id for s in clean.sensors}
 
         # If caller provides measurements, strictly validate them against the detector result
         if measurements is not None:
@@ -116,8 +118,8 @@ class ToolContext:
             self.measurements = list(expected_measurements)
 
         self._valid_record_ids: set[str] = {
-            r.event_id for r in snapshot.readings
-        } | {e.event_id for e in snapshot.events}
+            r.event_id for r in clean.readings
+        } | {e.event_id for e in clean.events}
 
         self._evidence_registry: dict[str, EvidenceRef] = {}
         self._cache: dict[str, dict[str, Any]] = {}

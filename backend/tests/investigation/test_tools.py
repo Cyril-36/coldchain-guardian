@@ -953,3 +953,30 @@ def test_door_temporal_facts_door_opens_after_rise():
     assert "Door open event was not observed prior to temperature rise" in tf["summary"]
     assert "does not establish causation" in tf["summary"]
 
+
+def test_tool_context_normalizes_duplicate_readings_and_events():
+    """ToolContext normalizes snapshot via validate_snapshot (dedupes, rejects conflicts)."""
+    snap = _make_snapshot()
+    r_dup = snap.readings[0].model_copy()
+    e_dup = snap.events[0].model_copy()
+
+    # Snapshot with identical duplicates
+    snap_with_dups = snap.model_copy(
+        update={
+            "readings": snap.readings + [r_dup],
+            "events": snap.events + [e_dup],
+        }
+    )
+    ctx = ToolContext(snap_with_dups)
+    # Deduplication collapses duplicates
+    assert len(ctx.snapshot.readings) == len(snap.readings)
+    assert len(ctx.snapshot.events) == len(snap.events)
+    assert len(ctx._valid_record_ids) == len(snap.readings) + len(snap.events)
+
+    # Conflicting duplicate reading raises ValueError
+    r_conflict = r_dup.model_copy(update={"temperature_c": r_dup.temperature_c + 5.0})
+    snap_with_conflict = snap.model_copy(update={"readings": snap.readings + [r_conflict]})
+    with pytest.raises(ValueError, match="Conflicting duplicate reading"):
+        ToolContext(snap_with_conflict)
+
+
