@@ -888,11 +888,11 @@ def test_door_temporal_facts_opening_overlap_recovery():
     assert tf is not None
     assert tf["has_excursion"] is True
     assert tf["door_opened_before_rise"] is True
-    assert tf["lead_time_seconds"] == 30.0  # 60s rise - 30s open = 30s
+    assert tf["lead_time_seconds"] == 15.0  # 45s threshold crossing - 30s open = 15s
     assert tf["overlap_interval"] is not None
-    assert tf["overlap_interval"]["duration_seconds"] == 30.0  # [60s, 90s]
+    assert tf["overlap_interval"]["duration_seconds"] == 45.0  # [45s, 90s]
     assert tf["temperature_recovered_after_close"] is True
-    assert tf["recovery_time_seconds"] == 30.0  # 120s recovery - 90s close = 30s
+    assert tf["recovery_time_seconds"] == 7.5  # 97.5s recovery - 90s close = 7.5s
     assert tf["method_version"] == TOOLS_VERSION
     assert "does not establish causation" in tf["summary"]
 
@@ -903,7 +903,9 @@ def test_door_temporal_facts_opening_overlap_recovery():
     assert ev.method_version == TOOLS_VERSION
     assert e_open.event_id in ev.record_ids
     assert e_close.event_id in ev.record_ids
+    assert r0.event_id in ev.record_ids
     assert r60.event_id in ev.record_ids
+    assert r90.event_id in ev.record_ids
     assert r120.event_id in ev.record_ids
 
 
@@ -978,5 +980,149 @@ def test_tool_context_normalizes_duplicate_readings_and_events():
     snap_with_conflict = snap.model_copy(update={"readings": snap.readings + [r_conflict]})
     with pytest.raises(ValueError, match="Conflicting duplicate reading"):
         ToolContext(snap_with_conflict)
+
+
+def test_refrigeration_fault_after_ten_running_events():
+    """Refrigeration summary detects fault even when preceded by 10 running events."""
+    events = [
+        Event(
+            event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, f"ref.{i}")),
+            observed_at=_ts(i * 10),
+            event_type=EventType.refrigeration_state,
+            value="running",
+            source="telemetry",
+        )
+        for i in range(10)
+    ]
+    events.append(
+        Event(
+            event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, "ref.fault")),
+            observed_at=_ts(100),
+            event_type=EventType.refrigeration_state,
+            value="fault",
+            source="telemetry",
+        )
+    )
+    snap = _make_snapshot(events=events, cutoff_seconds=300)
+    ctx = ToolContext(snap)
+    res = get_refrigeration_events(ctx)
+
+    assert res["count"] == 11
+    assert res["is_truncated"] is True
+    assert len(res["events"]) == 10
+    assert res["has_fault_or_stopped"] is True
+
+
+def test_door_opened_at_second_50_after_interpolated_rise_at_second_45():
+    """Door opening at 50s after threshold crossing at 45s is not reported before rise."""
+    ref_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, "sensor.ref"))
+    cmp_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, "sensor.cmp"))
+    sensors = [
+        Sensor(sensor_id=ref_id, placement="center", role=SensorRole.reference),
+        Sensor(sensor_id=cmp_id, placement="door", role=SensorRole.comparison),
+    ]
+    # Threshold 8°C. 5°C at 0s, 9°C at 60s. Crossing at 45s.
+    r0 = Reading(
+        event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, "r0")),
+        sensor_id=ref_id,
+        observed_at=_ts(0),
+        temperature_c=5.0,
+    )
+    r60 = Reading(
+        event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, "r60")),
+        sensor_id=ref_id,
+        observed_at=_ts(60),
+        temperature_c=9.0,
+    )
+    # Door opens at second 50 (after rise at 45s, but before sample at 60s)
+    e_open = Event(
+        event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, "door.open")),
+        observed_at=_ts(50),
+        event_type=EventType.door_state,
+        value="open",
+        source="sensor",
+    )
+    snap = _make_snapshot(
+        readings=[r0, r60],
+        sensors=sensors,
+        events=[e_open],
+        cutoff_seconds=300,
+    )
+    ctx = ToolContext(snap)
+    res = get_door_events(ctx)
+
+    tf = res.get("temporal_facts")
+    assert tf is not None
+    assert tf["has_excursion"] is True
+    assert tf["door_opened_before_rise"] is False
+    assert tf["lead_time_seconds"] is None
+    assert "Door open event was not observed prior to temperature rise" in tf["summary"]
+
+
+def test_door_closed_before_excursion_does_not_report_recovery():
+    """Door closing before excursion starts does not report recovery at door close time."""
+    ref_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, "sensor.ref"))
+    cmp_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, "sensor.cmp"))
+    sensors = [
+        Sensor(sensor_id=ref_id, placement="center", role=SensorRole.reference),
+        Sensor(sensor_id=cmp_id, placement="door", role=SensorRole.comparison),
+    ]
+    # Door opens at 10s, closes at 20s
+    e_open = Event(
+        event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, "door.open")),
+        observed_at=_ts(10),
+        event_type=EventType.door_state,
+        value="open",
+        source="sensor",
+    )
+    e_close = Event(
+        event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, "door.close")),
+        observed_at=_ts(20),
+        event_type=EventType.door_state,
+        value="closed",
+        source="sensor",
+    )
+    # Temperature stays normal 5°C until 60s, then rises to 9°C at 120s
+    r0 = Reading(
+        event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, "r0")),
+        sensor_id=ref_id,
+        observed_at=_ts(0),
+        temperature_c=5.0,
+    )
+    r30 = Reading(
+        event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, "r30")),
+        sensor_id=ref_id,
+        observed_at=_ts(30),
+        temperature_c=5.0,
+    )
+    r60 = Reading(
+        event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, "r60")),
+        sensor_id=ref_id,
+        observed_at=_ts(60),
+        temperature_c=5.0,
+    )
+    r120 = Reading(
+        event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, "r120")),
+        sensor_id=ref_id,
+        observed_at=_ts(120),
+        temperature_c=9.0,
+    )
+    snap = _make_snapshot(
+        readings=[r0, r30, r60, r120],
+        sensors=sensors,
+        events=[e_open, e_close],
+        cutoff_seconds=300,
+    )
+    ctx = ToolContext(snap)
+    res = get_door_events(ctx)
+
+    tf = res.get("temporal_facts")
+    assert tf is not None
+    assert tf["has_excursion"] is True
+    # Door closed 85s before excursion crossing at 105s; cannot claim recovery
+    assert tf["temperature_recovered_after_close"] is False
+    assert tf["recovery_time_seconds"] is None
+    assert tf["overlap_interval"] is None
+
 
 

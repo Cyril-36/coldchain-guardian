@@ -25,6 +25,7 @@ from coldchain.contracts.schemas import (
     Snapshot,
 )
 from coldchain.core.detector import (
+    _get_sensor_excursion_windows,
     build_measurement_evidence,
     detect_excursions,
     validate_snapshot,
@@ -574,37 +575,59 @@ def _compute_door_temporal_facts(
     ref_readings.sort(key=lambda r: (r.observed_at, r.event_id))
 
     policy = ctx.snapshot.policy
-    out_readings = [
-        r
-        for r in ref_readings
-        if r.temperature_c < policy.min_c or r.temperature_c > policy.max_c
-    ]
-    if not out_readings:
-        t_rise = ref_measurement.first_observed_out_at or ref_readings[0].observed_at
-        first_out_rec_id = None
-        t_fall = ref_measurement.last_observed_out_at or t_rise
-        last_out_rec_id = None
-    else:
-        first_out = out_readings[0]
-        last_out = out_readings[-1]
-        t_rise = first_out.observed_at
-        first_out_rec_id = first_out.event_id
-        t_fall = last_out.observed_at
-        last_out_rec_id = last_out.event_id
+    windows = _get_sensor_excursion_windows(ref_readings, policy)
+
+    if not windows or (
+        ref_measurement.estimated_out_of_range_seconds == 0.0
+        and ref_measurement.first_observed_out_at is None
+    ):
+        return {
+            "has_excursion": False,
+            "door_opened_before_rise": False,
+            "lead_time_seconds": None,
+            "overlap_interval": None,
+            "temperature_recovered_after_close": False,
+            "recovery_time_seconds": None,
+            "record_ids": [],
+            "method_version": TOOLS_VERSION,
+            "summary": (
+                "No excursion detected on reference sensor; "
+                "temporal door correlation not applicable."
+            ),
+            "evidence_id": None,
+        }
+
+    # Primary excursion window (using detector's valid excursion intervals)
+    w_start_ts, w_end_ts = windows[0]
+    tz = ref_readings[0].observed_at.tzinfo
+    t_rise = datetime.fromtimestamp(w_start_ts, tz=tz)
+    t_fall = datetime.fromtimestamp(w_end_ts, tz=tz)
+
+    used_record_ids: set[str] = set()
+    used_timestamps: list[datetime] = [t_rise, t_fall]
+
+    # Gather readings that define the excursion window or fall within it
+    for i, r in enumerate(ref_readings):
+        r_ts = r.observed_at.timestamp()
+        if w_start_ts <= r_ts <= w_end_ts:
+            used_record_ids.add(r.event_id)
+            used_timestamps.append(r.observed_at)
+        if i + 1 < len(ref_readings):
+            next_ts = ref_readings[i + 1].observed_at.timestamp()
+            if r_ts < w_start_ts < next_ts:
+                used_record_ids.add(r.event_id)
+                used_record_ids.add(ref_readings[i + 1].event_id)
+                used_timestamps.append(r.observed_at)
+                used_timestamps.append(ref_readings[i + 1].observed_at)
+            if r_ts < w_end_ts < next_ts:
+                used_record_ids.add(r.event_id)
+                used_record_ids.add(ref_readings[i + 1].event_id)
+                used_timestamps.append(r.observed_at)
+                used_timestamps.append(ref_readings[i + 1].observed_at)
 
     sorted_door_events = sorted(door_events, key=lambda e: (e.observed_at, e.event_id))
     open_events = [e for e in sorted_door_events if e.value == "open"]
     close_events = [e for e in sorted_door_events if e.value == "closed"]
-
-    used_record_ids: set[str] = set()
-    used_timestamps: list[datetime] = []
-
-    if first_out_rec_id:
-        used_record_ids.add(first_out_rec_id)
-        used_timestamps.append(t_rise)
-    if last_out_rec_id:
-        used_record_ids.add(last_out_rec_id)
-        used_timestamps.append(t_fall)
 
     # 1. Door opening before rise
     prior_open = [e for e in open_events if e.observed_at <= t_rise]
@@ -644,29 +667,24 @@ def _compute_door_temporal_facts(
                 "end_at": overlap_end.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "duration_seconds": overlap_duration,
             }
-            for r in ref_readings:
-                if overlap_start <= r.observed_at <= overlap_end:
-                    used_record_ids.add(r.event_id)
-                    used_timestamps.append(r.observed_at)
+            used_timestamps.append(overlap_start)
+            used_timestamps.append(overlap_end)
 
     # 3. Recovery after close
+    # Only applies if door closed during an ongoing excursion, and temperature
+    # recovered back to normal range before cutoff (not censored at end).
     temperature_recovered_after_close = False
     recovery_time_seconds: float | None = None
-    if close_event:
-        post_close_readings = [
-            r for r in ref_readings if r.observed_at >= close_event.observed_at
-        ]
-        recovery_reading = next(
-            (r for r in post_close_readings if policy.min_c <= r.temperature_c <= policy.max_c),
-            None,
+    if (
+        close_event
+        and t_rise <= close_event.observed_at < t_fall
+        and not ref_measurement.censored_end
+    ):
+        temperature_recovered_after_close = True
+        recovery_time_seconds = round(
+            (t_fall - close_event.observed_at).total_seconds(), 1
         )
-        if recovery_reading:
-            temperature_recovered_after_close = True
-            recovery_time_seconds = round(
-                (recovery_reading.observed_at - close_event.observed_at).total_seconds(), 1
-            )
-            used_record_ids.add(recovery_reading.event_id)
-            used_timestamps.append(recovery_reading.observed_at)
+        used_timestamps.append(t_fall)
 
     # Narrative describing temporal association without claiming causation
     parts: list[str] = []
@@ -773,8 +791,11 @@ def get_refrigeration_events(ctx: ToolContext) -> dict[str, Any]:
         ctx, EventType.refrigeration_state, "refrigeration_events", "refrigeration"
     )
     if not res["is_missing"]:
+        all_refrig = [
+            e for e in ctx.snapshot.events if e.event_type == EventType.refrigeration_state
+        ]
         res["has_fault_or_stopped"] = any(
-            e["value"] in ("fault", "stopped") for e in res["events"]
+            e.value in ("fault", "stopped") for e in all_refrig
         )
     else:
         res["has_fault_or_stopped"] = False
