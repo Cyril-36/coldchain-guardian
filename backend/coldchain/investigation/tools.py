@@ -40,6 +40,9 @@ TOOLS_VERSION = "1.0.0"
 
 DISAGREEMENT_THRESHOLD_C = 1.5
 
+# Floating-point slack for comparing interpolated instants against observed ones.
+_INTERVAL_TOLERANCE = 1e-6
+
 # Measurement fields that a caller-supplied SensorMeasurement must match exactly.
 _VERIFIED_MEASUREMENT_FIELDS = (
     "estimated_out_of_range_seconds",
@@ -657,22 +660,82 @@ def _covered_seconds_within(
     )
 
 
-def _ends_in_observed_return_to_range(
+def _classify_excursion_interval_end(
     interval_end: float,
+    readings: list[Reading],
     spans: list[tuple[float, float]],
-) -> bool:
-    """Return True if an excursion interval ended by re-entering the normal range.
+    policy: Policy,
+) -> tuple[bool, str | None]:
+    """Decide whether an excursion interval ended by returning to the normal range.
 
     A valid excursion interval can end for two very different reasons: the
-    temperature path crossed back into range, or observation simply stopped (a data
-    gap, or the final reading). Only the first is a recovery. The interval end is a
-    genuine return to range exactly when it falls strictly inside a continuously
-    covered span, because the path was still being observed immediately afterwards.
+    temperature path came back into range, or observation simply stopped (a data gap,
+    or the final reading). Only the first is a recovery.
+
+    Returns ``(recovered, reason)``; ``reason`` is set only when not recovered.
     """
+    # An observed reading sitting exactly at the interval end settles it directly.
+    # The policy range is inclusive, so a reading on the threshold is a return to
+    # range, and the last reading of a snapshot is as good an observation as any.
+    for r in readings:
+        if abs(r.observed_at.timestamp() - interval_end) <= _INTERVAL_TOLERANCE:
+            if not is_out_of_range(r.temperature_c, policy.min_c, policy.max_c):
+                return True, None
+            break
+
     for span_start, span_end in spans:
         if span_start <= interval_end <= span_end:
-            return interval_end < span_end - 1e-6
-    return False
+            if interval_end < span_end - _INTERVAL_TOLERANCE:
+                # An interpolated crossing strictly inside a covered span: the path
+                # was still being observed immediately afterwards.
+                return True, None
+            if readings and (
+                interval_end >= readings[-1].observed_at.timestamp() - _INTERVAL_TOLERANCE
+            ):
+                return False, "observed_coverage_ends_while_still_out_of_range"
+            return False, "observed_coverage_ends_at_a_data_gap_before_any_return_to_range"
+
+    return False, "observed_coverage_ends_at_a_data_gap_before_any_return_to_range"
+
+
+def _confirmed_open_window(
+    open_event: Event,
+    sorted_door_events: list[Event],
+    cutoff_at: datetime,
+) -> tuple[datetime, Event | None, Event | None, datetime | None]:
+    """Resolve how long the door is *confirmed* open after ``open_event``.
+
+    Returns ``(confirmed_open_until, terminating_event, close_event,
+    door_state_unknown_until)``.
+
+    The door is confirmed open only until the first later event reporting a different
+    state. An explicit ``unknown`` ends that window exactly as ``closed`` does: after
+    it the door state is not established, and unknown state must never be counted as
+    confirmed open. When the window ends in ``unknown`` there is no defensible close
+    instant either, even if a later ``closed`` event exists, because the door could
+    have closed anywhere in the unknown span — so ``close_event`` stays None.
+    """
+    later = [e for e in sorted_door_events if e.observed_at > open_event.observed_at]
+    terminator = next((e for e in later if e.value != DoorState.open), None)
+
+    if terminator is None:
+        return cutoff_at, None, None, None
+
+    if terminator.value == DoorState.closed:
+        return terminator.observed_at, terminator, terminator, None
+
+    # terminator.value is DoorState.unknown: the state is unknown from here until the
+    # next event that reports a definite state, or the cutoff.
+    next_definite = next(
+        (
+            e
+            for e in later
+            if e.observed_at > terminator.observed_at and e.value != DoorState.unknown
+        ),
+        None,
+    )
+    unknown_until = next_definite.observed_at if next_definite else cutoff_at
+    return terminator.observed_at, terminator, None, unknown_until
 
 
 def _compute_door_temporal_facts(
@@ -688,9 +751,14 @@ def _compute_door_temporal_facts(
     - Overlap is reported as separate covered segments. Disjoint segments are never
       collapsed into one interval, and unobserved time inside the door-open window is
       reported separately as ``overlap_unknown_seconds``.
+    - The door is confirmed open only until the first later event reporting a
+      different state. An explicit ``unknown`` ends the confirmed window exactly as
+      ``closed`` does, and the unknown span is reported as
+      ``door_state_unknown_seconds`` rather than counted as open.
     - Recovery is claimed only when the excursion interval containing the door close
-      ends with a transition back into range inside continuous coverage. Otherwise the
-      result is "not established" — never "did not recover".
+      ends with a transition back into range inside continuous coverage, or at an
+      observed reading that is inside the inclusive policy range. Otherwise the result
+      is "not established" — never "did not recover".
 
     Absence of evidence is never reported as evidence of absence, and a temporal
     association never claims causation.
@@ -722,6 +790,7 @@ def _compute_door_temporal_facts(
             "overlap_measured_seconds": 0.0,
             "overlap_unknown_seconds": 0.0,
             "overlap_status": "not_applicable",
+            "door_state_unknown_seconds": 0.0,
             "temperature_recovered_after_close": False,
             "recovery_time_seconds": None,
             "recovery_status": "not_applicable",
@@ -793,7 +862,6 @@ def _compute_door_temporal_facts(
 
     sorted_door_events = sorted(door_events, key=lambda e: (e.observed_at, e.event_id))
     open_events = [e for e in sorted_door_events if e.value == DoorState.open]
-    close_events = [e for e in sorted_door_events if e.value == DoorState.closed]
 
     # 1. Door opening before rise
     prior_open = (
@@ -827,19 +895,31 @@ def _compute_door_temporal_facts(
     overlap_measured_seconds = 0.0
     overlap_unknown_seconds = 0.0
     overlap_status = "no_door_open_event_observed"
+    door_state_unknown_seconds = 0.0
     close_event: Event | None = None
+    terminating_event: Event | None = None
     if open_event:
-        subsequent_closes = [e for e in close_events if e.observed_at >= open_event.observed_at]
-        if subsequent_closes:
-            close_event = min(subsequent_closes, key=lambda e: e.observed_at)
-            door_closed_at = close_event.observed_at
-            used_record_ids.add(close_event.event_id)
-            used_timestamps.append(close_event.observed_at)
-        else:
-            door_closed_at = ctx.snapshot.cutoff_at
+        (
+            confirmed_open_until,
+            terminating_event,
+            close_event,
+            door_state_unknown_until,
+        ) = _confirmed_open_window(open_event, sorted_door_events, ctx.snapshot.cutoff_at)
+
+        if terminating_event is not None:
+            used_record_ids.add(terminating_event.event_id)
+            used_timestamps.append(terminating_event.observed_at)
+
+        if door_state_unknown_until is not None and terminating_event is not None:
+            door_state_unknown_seconds = _elapsed_seconds(
+                terminating_event.observed_at, door_state_unknown_until
+            )
 
         door_open_ts = open_event.observed_at.timestamp()
-        door_close_ts = door_closed_at.timestamp()
+        # Overlap is measured against the *confirmed* open window only. Time during
+        # which the door state is unknown is reported separately and never counted
+        # as confirmed open.
+        door_close_ts = confirmed_open_until.timestamp()
 
         # Calculate overlap strictly from observed or validly interpolated intervals
         overlap_segments: list[tuple[float, float]] = []
@@ -905,7 +985,12 @@ def _compute_door_temporal_facts(
     recovery_reason: str | None = None
 
     if close_event is None:
-        recovery_reason = "no_door_close_event_observed_before_cutoff"
+        if terminating_event is not None and terminating_event.value == DoorState.unknown:
+            # A later `closed` event may exist, but the door could have closed
+            # anywhere inside the unknown span, so no close instant is defensible.
+            recovery_reason = "door_state_unknown_before_any_observed_close"
+        else:
+            recovery_reason = "no_door_close_event_observed_before_cutoff"
     else:
         close_ts = close_event.observed_at.timestamp()
         containing = next(
@@ -914,16 +999,18 @@ def _compute_door_temporal_facts(
         )
         if containing is None:
             recovery_reason = "door_close_not_within_measured_excursion_coverage"
-        elif _ends_in_observed_return_to_range(containing[1], covered_spans):
-            temperature_recovered_after_close = True
-            recovery_status = "recovered"
-            recovery_dt = _instant(containing[1], tz)
-            recovery_time_seconds = _elapsed_seconds(close_event.observed_at, recovery_dt)
-            used_timestamps.append(recovery_dt)
-        elif ref_measurement.censored_end:
-            recovery_reason = "observed_coverage_ends_while_still_out_of_range"
         else:
-            recovery_reason = "observed_coverage_ends_at_a_data_gap_before_any_return_to_range"
+            recovered, reason = _classify_excursion_interval_end(
+                containing[1], ref_readings, covered_spans, policy
+            )
+            if recovered:
+                temperature_recovered_after_close = True
+                recovery_status = "recovered"
+                recovery_dt = _instant(containing[1], tz)
+                recovery_time_seconds = _elapsed_seconds(close_event.observed_at, recovery_dt)
+                used_timestamps.append(recovery_dt)
+            else:
+                recovery_reason = reason
 
     # Narrative describing temporal association without claiming causation
     parts: list[str] = []
@@ -966,15 +1053,27 @@ def _compute_door_temporal_facts(
         )
     elif overlap_status == "none_within_covered_data":
         parts.append(
-            "No overlap between the open door and the excursion window within "
-            "continuously observed coverage."
+            "No overlap between the confirmed open door and the excursion window "
+            "within continuously observed coverage."
         )
     else:
         parts.append("No door open event was observed in the snapshot.")
 
+    if door_state_unknown_seconds > 0.0:
+        parts.append(
+            f"Door state is reported unknown for {door_state_unknown_seconds}s after the "
+            "confirmed open window; that time is not counted as open and the door may "
+            "have been open or closed during it."
+        )
+
     if temperature_recovered_after_close:
         parts.append(
             f"Temperature returned to normal range {recovery_time_seconds}s after door closed."
+        )
+    elif recovery_reason == "door_state_unknown_before_any_observed_close":
+        parts.append(
+            "Recovery after door close could not be established: door state becomes "
+            "unknown before any observed close, so no close instant is defensible."
         )
     elif recovery_reason == "no_door_close_event_observed_before_cutoff":
         parts.append(
@@ -1031,6 +1130,9 @@ def _compute_door_temporal_facts(
         "overlap_measured_seconds": overlap_measured_seconds,
         "overlap_unknown_seconds": overlap_unknown_seconds,
         "overlap_status": overlap_status,
+        # Time during which the door state itself is not established. Distinct from
+        # overlap_unknown_seconds, which is unobserved *temperature* coverage.
+        "door_state_unknown_seconds": door_state_unknown_seconds,
         "temperature_recovered_after_close": temperature_recovered_after_close,
         "recovery_time_seconds": recovery_time_seconds,
         "recovery_status": recovery_status,
@@ -1131,4 +1233,3 @@ def get_handling_policy(ctx: ToolContext) -> dict[str, Any]:
     }
     ctx._cache["handling_policy"] = result
     return result
-

@@ -1398,3 +1398,103 @@ def test_no_overlap_within_full_coverage_is_stated_as_absence_not_uncertainty():
     # the excursion, so nothing about it can be concluded.
     assert tf["recovery_status"] == "not_established"
     assert "did not recover" not in tf["summary"]
+
+
+# ── Regression: unknown door state and inclusive-threshold recovery ─────────
+
+
+def test_unknown_door_event_ends_the_confirmed_open_window():
+    """An explicit `unknown` door state must not be counted as confirmed open.
+
+    Door events are open at 0s, unknown at 20s and closed at 100s, with the
+    reference sensor out of range throughout. The door is confirmed open only for
+    the first 20s; from 20s the state is not established, so the remaining 80s must
+    be reported as unknown door state rather than as 100s of measured overlap.
+    """
+    snap = _ref_only_snapshot(
+        temps=[(0, 10.0), (50, 10.0), (100, 10.0)],
+        door=[(0, "open"), (20, "unknown"), (100, "closed")],
+    )
+    ctx = ToolContext(snap)
+    tf = get_door_events(ctx)["temporal_facts"]
+    assert tf is not None
+
+    # The regression: 100s of overlap claimed across the unknown span.
+    assert tf["overlap_measured_seconds"] == 20.0
+    assert tf["overlap_interval"]["end_at"] == "2026-01-01T12:00:20Z"
+    assert tf["door_state_unknown_seconds"] == 80.0
+
+    # Unknown door state is surfaced, not silently folded into either state.
+    assert "unknown for 80.0s" in tf["summary"]
+    assert "may have been open or closed" in tf["summary"]
+
+    # The unknown span also removes any defensible close instant, so recovery after
+    # close cannot be established even though a later `closed` event exists.
+    assert tf["recovery_status"] == "not_established"
+    assert tf["recovery_reason"] == "door_state_unknown_before_any_observed_close"
+    assert "did not recover" not in tf["summary"]
+
+
+def test_unknown_door_event_after_close_leaves_the_close_intact():
+    """An `unknown` arriving after a genuine close does not disturb the window."""
+    snap = _ref_only_snapshot(
+        temps=[(0, 10.0), (60, 5.0), (120, 5.0)],
+        door=[(0, "open"), (10, "closed"), (90, "unknown")],
+    )
+    ctx = ToolContext(snap)
+    tf = get_door_events(ctx)["temporal_facts"]
+    assert tf is not None
+
+    # The `unknown` at 90s follows a genuine close, so it neither shortens the
+    # confirmed open window nor contributes unknown door-state time to it.
+    assert tf["door_state_unknown_seconds"] == 0.0
+    assert tf["overlap_measured_seconds"] == 10.0  # confirmed open 0s-10s
+    # 10°C to 5°C over 60s crosses back into range at 24s, 14s after the close.
+    assert tf["recovery_status"] == "recovered"
+    assert tf["recovery_time_seconds"] == 14.0
+
+
+def test_recovery_accepts_an_observed_reading_on_the_inclusive_threshold():
+    """A reading exactly on the policy maximum is a return to the inclusive range.
+
+    Readings are 10°C at 0s and 8°C at 60s against an inclusive 2-8°C range, with
+    the door closing at 30s. The 60s reading is in range, so the excursion interval
+    ends at an observed return to range -- not at a data gap. Recovery must be
+    established rather than reported as unestablished coverage.
+    """
+    snap = _ref_only_snapshot(
+        temps=[(0, 10.0), (60, 8.0)],
+        door=[(0, "open"), (30, "closed")],
+    )
+    ctx = ToolContext(snap)
+
+    # 8.0°C is inside the inclusive range, so the detector sees the excursion end.
+    assert ctx.measurements[0].censored_end is False
+
+    tf = get_door_events(ctx)["temporal_facts"]
+    assert tf is not None
+
+    # The regression: not_established, blaming a data gap that does not exist.
+    assert tf["temperature_recovered_after_close"] is True
+    assert tf["recovery_status"] == "recovered"
+    assert tf["recovery_reason"] is None
+    assert tf["recovery_time_seconds"] == 30.0  # in-range at 60s, closed at 30s
+    assert "Temperature returned to normal range" in tf["summary"]
+    assert "data gap" not in tf["summary"]
+
+
+def test_final_reading_still_out_of_range_is_not_a_recovery():
+    """The inclusive-threshold fix must not turn a censored end into a recovery."""
+    snap = _ref_only_snapshot(
+        temps=[(0, 10.0), (60, 9.0)],
+        door=[(0, "open"), (30, "closed")],
+    )
+    ctx = ToolContext(snap)
+    assert ctx.measurements[0].censored_end is True
+
+    tf = get_door_events(ctx)["temporal_facts"]
+    assert tf is not None
+    assert tf["temperature_recovered_after_close"] is False
+    assert tf["recovery_status"] == "not_established"
+    assert tf["recovery_reason"] == "observed_coverage_ends_while_still_out_of_range"
+    assert "did not recover" not in tf["summary"]
