@@ -334,10 +334,16 @@ def _get_sensor_excursion_windows(
 
         if gap > policy.max_gap_seconds:
             # Data gap: do not interpolate across unobserved intervals.
-            # Record point excursions if endpoints are out of range.
-            if _out_of_range(r1.temperature_c, policy.min_c, policy.max_c):
+            # If both endpoints are out of range with no observed in-range data between them,
+            # we cannot claim multiple windows (it may be a single continuous excursion).
+            # Bridge them for window counting so the gap does not create an artificial split.
+            out1 = _out_of_range(r1.temperature_c, policy.min_c, policy.max_c)
+            out2 = _out_of_range(r2.temperature_c, policy.min_c, policy.max_c)
+            if out1 and out2:
+                raw_intervals.append((t1, t2))
+            elif out1:
                 raw_intervals.append((t1, t1))
-            if _out_of_range(r2.temperature_c, policy.min_c, policy.max_c):
+            elif out2:
                 raw_intervals.append((t2, t2))
         else:
             seg_intervals = _segment_excursion_intervals(

@@ -484,7 +484,13 @@ def test_comparison_only_secondary_sensor_anomaly():
 
 
 def test_multiple_windows_gap_during_excursion():
-    """A sensor with an excursion and an unknown duration gap indicates multiple windows."""
+    """An unknown gap between out-of-range readings does not prove multiple windows.
+
+    Per CONTRACTS.md and review feedback, wide gaps must not be interpolated and
+    missing evidence must remain unknown. The outcome must maintain needs_review=True
+    with partial coverage and unknown duration, but must not claim multiple windows
+    solely from the unobserved gap.
+    """
     readings = [
         _reading("r-0", "s-ref", 0, 10.0),     # out of range
         _reading("r-1", "s-ref", 300, 10.0),   # gap > 120s, still out of range
@@ -494,8 +500,11 @@ def test_multiple_windows_gap_during_excursion():
 
     assert res.has_excursion is True
     assert res.needs_review is True
-    assert res.reason == "multiple_windows_unsupported"
-    assert check_multiple_windows(res.measurements, snap) is True
+    assert res.reason is None
+    assert check_multiple_windows(res.measurements, snap) is False
+    m = res.measurements[0]
+    assert m.unknown_duration_seconds == 300.0
+    assert m.coverage_status == CoverageStatus.partial
 
 
 def test_multiple_windows_disjoint_spikes():
