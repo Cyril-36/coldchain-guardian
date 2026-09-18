@@ -4,6 +4,7 @@ import { TelemetryChart } from "./TelemetryChart";
 import { PrintableReport } from "./PrintableReport";
 import { useRunData } from "./useRunData";
 import { useOperatorActions } from "./useOperatorActions";
+import { navigation } from "./navigation";
 import { useAuth } from "../auth/AuthProvider";
 import type { Report, Snapshot, ReviewDecision, Review } from "../types/contracts";
 
@@ -207,9 +208,9 @@ export function DashboardPage() {
               onChange={(e) => {
                 const val = e.target.value;
                 if (live.source === "api") {
-                  window.location.assign(`${window.location.pathname}?demo_run_id=${encodeURIComponent(val)}`);
+                  navigation.assign(`${window.location.pathname}?demo_run_id=${encodeURIComponent(val)}`);
                 } else {
-                  window.location.assign(`${window.location.pathname}?case=${encodeURIComponent(val)}`);
+                  navigation.assign(`${window.location.pathname}?case=${encodeURIComponent(val)}`);
                 }
               }}
               className="ml-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-normal text-slate-950"

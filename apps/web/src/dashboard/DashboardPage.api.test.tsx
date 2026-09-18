@@ -45,10 +45,7 @@ const demoSummaries = [
   },
 ];
 
-// @ts-ignore - internal jsdom location prototype for Vitest navigation spy
-import LocationImplModule from "jsdom/lib/jsdom/living/window/Location-impl.js";
-
-const LocationImpl = (LocationImplModule as any).implementation ?? LocationImplModule;
+import { navigation } from "./navigation";
 
 describe("DashboardPage API-backed interactions", () => {
   let originalFetch: typeof fetch;
@@ -57,7 +54,7 @@ describe("DashboardPage API-backed interactions", () => {
   beforeEach(() => {
     vi.stubEnv("VITE_API_BASE_URL", API_BASE);
     originalFetch = globalThis.fetch;
-    assignSpy = vi.spyOn(LocationImpl.prototype, "assign").mockImplementation(() => {});
+    assignSpy = vi.spyOn(navigation, "assign").mockImplementation(() => {});
     window.history.pushState({}, "", "/");
     vi.mocked(authModule.isCognitoConfigured).mockReturnValue(false);
     vi.mocked(authModule.getCurrentUser).mockResolvedValue(null);
@@ -190,7 +187,7 @@ describe("DashboardPage API-backed interactions", () => {
     });
   });
 
-  it("polls in-progress run and transitions to completed dashboard once ready", async () => {
+  it("allows manual retry of in-progress run and transitions to completed dashboard once ready", async () => {
     window.history.pushState({}, "", "/?run_id=00000000-0000-0000-0000-000000001099");
 
     vi.mocked(authModule.isCognitoConfigured).mockReturnValue(true);

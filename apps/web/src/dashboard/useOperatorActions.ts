@@ -4,6 +4,7 @@ import { createApiEndpoints } from "../api/endpoints";
 import type { CreateReviewRequest, Review } from "../types/contracts";
 import { useAuth } from "../auth/AuthProvider";
 import { createRunAttempt, type RunCreationAttempt } from "./runAttempt";
+import { navigation } from "./navigation";
 
 export { createRunAttempt } from "./runAttempt";
 export type { RunCreationAttempt } from "./runAttempt";
@@ -44,7 +45,7 @@ export function useOperatorActions(runId: string | null) {
       runRequestRef.current = request;
       const result = await api.createRun({ scenario_id: request.scenarioId, seed: request.seed }, request.idempotencyKey);
       runRequestRef.current = null;
-      window.location.assign(`${window.location.pathname}?run_id=${encodeURIComponent(result.run_id)}`);
+      navigation.assign(`${window.location.pathname}?run_id=${encodeURIComponent(result.run_id)}`);
     } catch (cause) {
       const nextError = cause instanceof Error ? cause : new Error("Unable to start investigation");
       setError(nextError);
@@ -68,7 +69,7 @@ export function useOperatorActions(runId: string | null) {
     setError(null);
     try {
       const result = publicDemo ? await getPublicApi().getDemoDownload(runId) : await getApi().getDownload(runId);
-      window.location.assign(result.url);
+      navigation.assign(result.url);
     } catch (cause) { const nextError = cause instanceof Error ? cause : new Error("Unable to download report"); setError(nextError); throw nextError; }
   }, [getApi, getPublicApi, runId]);
 
