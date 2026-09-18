@@ -161,24 +161,24 @@ export function DashboardPage() {
   const run = live.source === "api" ? live.run : (live.run ?? demoRun);
   const snapshot = live.source === "api" ? live.snapshot : (live.snapshot ?? demoSnapshot);
   const report = live.source === "api" ? live.report : (live.report ?? demoReport);
+  const isPublicDemo = live.source === "api" && !live.protectedRun;
+  const isProtectedRun = live.source === "api" && live.protectedRun;
+  const isReportReady = live.source === "api"
+    ? (live.run.status === "completed" || live.run.status === "needs_review") && live.snapshotReady && live.reportReady
+    : true;
   const referenceSensor = snapshot.sensors.find((sensor) => sensor.role === "reference");
   const primaryMeasurement = report.measurements.find((m) => m.sensor_id === referenceSensor?.sensor_id) ?? report.measurements[0];
   const refReadings = snapshot.readings.filter((r) => r.sensor_id === referenceSensor?.sensor_id);
   const snapshotPeakC = refReadings.length > 0
     ? Math.max(...refReadings.map((r) => r.temperature_c))
     : (snapshot.readings.length > 0 ? Math.max(...snapshot.readings.map((r) => r.temperature_c)) : null);
-  const observedPeak = primaryMeasurement?.observed_max_c ?? snapshotPeakC;
+  const observedPeak = isReportReady ? (primaryMeasurement?.observed_max_c ?? snapshotPeakC) : snapshotPeakC;
   const copy = outcomeCopy(report);
   const finding = report.hypotheses.find((item) => item.hypothesis === report.primary_hypothesis);
   const unresolvedFinding = report.hypotheses.find((item) => item.assessment === "insufficient");
   const evidence = live.source === "api"
     ? report.evidence
     : (report.evidence.length > 0 ? report.evidence : fixtureEvidence(snapshot));
-  const isPublicDemo = live.source === "api" && !live.protectedRun;
-  const isProtectedRun = live.source === "api" && live.protectedRun;
-  const isReportReady = live.source === "api"
-    ? (live.run.status === "completed" || live.run.status === "needs_review") && live.snapshotReady && live.reportReady
-    : true;
   const currentReview = actions.review ?? fixtureReview ?? run.review;
   const verificationCopy = report.verification.status === "passed"
     ? "Evidence references and measurements checked"
@@ -546,15 +546,17 @@ export function DashboardPage() {
               <details className="mt-3">
                 <summary className="cursor-pointer text-[10px] font-semibold">Diagnostics</summary>
                 <p className="mt-2 text-[10px] text-slate-500">Run ID: {run.run_id}</p>
-                <p className="text-[10px] text-slate-500">Report ID: {report.report_id}</p>
-                <p className="text-[10px] text-slate-500">Snapshot SHA-256: {report.snapshot_sha256}</p>
-                <p className="text-[10px] text-slate-500">Generation: {report.generation_mode}</p>
+                <p className="text-[10px] text-slate-500">Report ID: {isReportReady ? report.report_id : "Pending"}</p>
+                <p className="text-[10px] text-slate-500">Snapshot SHA-256: {isReportReady ? report.snapshot_sha256 : "Pending"}</p>
+                <p className="text-[10px] text-slate-500">Generation: {isReportReady ? report.generation_mode : (run.generation_mode ?? "Pending")}</p>
               </details>
             </article>
           </section>
         </div>
 
-        <PrintableReport run={run} snapshot={snapshot} report={report} reviewOverride={currentReview} />
+        {isReportReady && (
+          <PrintableReport run={run} snapshot={snapshot} report={report} reviewOverride={currentReview} />
+        )}
       </div>
     </main>
   );
