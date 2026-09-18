@@ -1125,4 +1125,81 @@ def test_door_closed_before_excursion_does_not_report_recovery():
     assert tf["overlap_interval"] is None
 
 
+def test_door_overlap_not_claimed_across_unobserved_gap():
+    """Door opening inside an unobserved gap does not produce door-excursion overlap.
+
+    Two high readings separated by a 300s unobserved gap (> policy max_gap_seconds 120s)
+    produce 0s of estimated excursion duration and 300s unknown duration in the deterministic
+    detector. A door open from 50s to 150s (100s duration) inside that unobserved gap must NOT
+    claim 100s of door-excursion overlap because no excursion duration can be established within
+    the unobserved gap. Overlap must be calculated only from observed or validly interpolated
+    intervals.
+    """
+    ref_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, "sensor.ref"))
+    cmp_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, "sensor.cmp"))
+    sensors = [
+        Sensor(sensor_id=ref_id, placement="center", role=SensorRole.reference),
+        Sensor(sensor_id=cmp_id, placement="door", role=SensorRole.comparison),
+    ]
+
+    # Two high readings separated by 300s (policy default max_gap is 120s)
+    r0 = Reading(
+        event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, "r0")),
+        sensor_id=ref_id,
+        observed_at=_ts(0),
+        temperature_c=10.0,
+    )
+    r300 = Reading(
+        event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, "r300")),
+        sensor_id=ref_id,
+        observed_at=_ts(300),
+        temperature_c=10.0,
+    )
+
+    # Door opens at 50s and closes at 150s (100s duration inside the 300s unobserved gap)
+    e_open = Event(
+        event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, "door.open")),
+        observed_at=_ts(50),
+        event_type=EventType.door_state,
+        value="open",
+        source="sensor",
+    )
+    e_close = Event(
+        event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, "door.close")),
+        observed_at=_ts(150),
+        event_type=EventType.door_state,
+        value="closed",
+        source="sensor",
+    )
+
+    snap = _make_snapshot(
+        readings=[r0, r300],
+        sensors=sensors,
+        events=[e_open, e_close],
+        cutoff_seconds=300,
+    )
+    ctx = ToolContext(snap)
+
+    # Verify deterministic detector metrics on the reference sensor:
+    # 0s estimated excursion, 300s unknown duration
+    ref_m = next(m for m in ctx.measurements if m.sensor_id == ref_id)
+    assert ref_m.estimated_out_of_range_seconds == 0.0
+    assert ref_m.unknown_duration_seconds == 300.0
+
+    res = get_door_events(ctx)
+    tf = res.get("temporal_facts")
+    assert tf is not None
+    assert tf["has_excursion"] is True
+    # Door opened after temperature was already out of range at 0s
+    assert tf["door_opened_before_rise"] is False
+    assert tf["lead_time_seconds"] is None
+    # Crucial assertion: overlap must NOT be claimed inside the unobserved gap
+    assert tf["overlap_interval"] is None
+    # No recovery can be established across unobserved gap
+    assert tf["temperature_recovered_after_close"] is False
+    assert tf["recovery_time_seconds"] is None
+    assert "No overlap observed between open door and excursion window" in tf["summary"]
+
+
+
 

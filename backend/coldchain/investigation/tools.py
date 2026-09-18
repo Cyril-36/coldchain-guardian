@@ -20,12 +20,14 @@ from coldchain.contracts.schemas import (
     Event,
     EvidenceInterval,
     EvidenceRef,
+    Policy,
     Reading,
     SensorMeasurement,
     Snapshot,
 )
 from coldchain.core.detector import (
-    _get_sensor_excursion_windows,
+    _out_of_range,
+    _segment_excursion_intervals,
     build_measurement_evidence,
     detect_excursions,
     validate_snapshot,
@@ -523,6 +525,53 @@ def _get_events_by_type(
     return result
 
 
+def _get_valid_excursion_intervals(
+    readings: list[Reading],
+    policy: Policy,
+) -> list[tuple[float, float]]:
+    """Compute excursion intervals strictly from observed or validly interpolated intervals.
+
+    Unlike the detector's window-counting helper, this function NEVER bridges unobserved
+    gaps (gaps > policy.max_gap_seconds). Intervals across unobserved gaps are excluded
+    because no excursion duration can be established within them.
+    """
+    if len(readings) < 2:
+        return []
+
+    raw_intervals: list[tuple[float, float]] = []
+
+    for i in range(len(readings) - 1):
+        r1, r2 = readings[i], readings[i + 1]
+        t1, t2 = r1.observed_at.timestamp(), r2.observed_at.timestamp()
+        gap = t2 - t1
+
+        if gap > policy.max_gap_seconds:
+            # Unobserved data gap: do not interpolate across unobserved intervals
+            continue
+
+        seg_intervals = _segment_excursion_intervals(
+            t1, r1.temperature_c, t2, r2.temperature_c, policy.min_c, policy.max_c
+        )
+        raw_intervals.extend(seg_intervals)
+
+    if not raw_intervals:
+        return []
+
+    sorted_intervals = sorted(raw_intervals, key=lambda iv: (iv[0], iv[1]))
+    merged: list[tuple[float, float]] = [sorted_intervals[0]]
+
+    for current in sorted_intervals[1:]:
+        prev_start, prev_end = merged[-1]
+        curr_start, curr_end = current
+
+        if curr_start <= prev_end + 1e-6:
+            merged[-1] = (prev_start, max(prev_end, curr_end))
+        else:
+            merged.append(current)
+
+    return merged
+
+
 def _compute_door_temporal_facts(
     ctx: ToolContext,
     door_events: list[Event],
@@ -575,62 +624,67 @@ def _compute_door_temporal_facts(
     ref_readings.sort(key=lambda r: (r.observed_at, r.event_id))
 
     policy = ctx.snapshot.policy
-    windows = _get_sensor_excursion_windows(ref_readings, policy)
+    valid_intervals = _get_valid_excursion_intervals(ref_readings, policy)
 
-    if not windows or (
-        ref_measurement.estimated_out_of_range_seconds == 0.0
-        and ref_measurement.first_observed_out_at is None
-    ):
-        return {
-            "has_excursion": False,
-            "door_opened_before_rise": False,
-            "lead_time_seconds": None,
-            "overlap_interval": None,
-            "temperature_recovered_after_close": False,
-            "recovery_time_seconds": None,
-            "record_ids": [],
-            "method_version": TOOLS_VERSION,
-            "summary": (
-                "No excursion detected on reference sensor; "
-                "temporal door correlation not applicable."
-            ),
-            "evidence_id": None,
-        }
+    tz = ref_readings[0].observed_at.tzinfo if ref_readings else None
 
-    # Primary excursion window (using detector's valid excursion intervals)
-    w_start_ts, w_end_ts = windows[0]
-    tz = ref_readings[0].observed_at.tzinfo
-    t_rise = datetime.fromtimestamp(w_start_ts, tz=tz)
-    t_fall = datetime.fromtimestamp(w_end_ts, tz=tz)
+    # Excursion rise timestamp (from valid interpolated interval if present,
+    # else first observed out)
+    t_rise: datetime | None = None
+    if valid_intervals:
+        w_start_ts = valid_intervals[0][0]
+        t_rise = datetime.fromtimestamp(w_start_ts, tz=tz)
+        if (
+            ref_measurement.first_observed_out_at is not None
+            and ref_measurement.first_observed_out_at < t_rise
+        ):
+            t_rise = ref_measurement.first_observed_out_at
+    else:
+        t_rise = ref_measurement.first_observed_out_at
 
     used_record_ids: set[str] = set()
-    used_timestamps: list[datetime] = [t_rise, t_fall]
+    used_timestamps: list[datetime] = []
+    if t_rise is not None:
+        used_timestamps.append(t_rise)
 
-    # Gather readings that define the excursion window or fall within it
-    for i, r in enumerate(ref_readings):
-        r_ts = r.observed_at.timestamp()
-        if w_start_ts <= r_ts <= w_end_ts:
-            used_record_ids.add(r.event_id)
-            used_timestamps.append(r.observed_at)
-        if i + 1 < len(ref_readings):
-            next_ts = ref_readings[i + 1].observed_at.timestamp()
-            if r_ts < w_start_ts < next_ts:
+    if valid_intervals:
+        for iv_start_ts, iv_end_ts in valid_intervals:
+            used_timestamps.append(datetime.fromtimestamp(iv_end_ts, tz=tz))
+            for i, r in enumerate(ref_readings):
+                r_ts = r.observed_at.timestamp()
+                if iv_start_ts <= r_ts <= iv_end_ts:
+                    used_record_ids.add(r.event_id)
+                    used_timestamps.append(r.observed_at)
+                if i + 1 < len(ref_readings):
+                    next_ts = ref_readings[i + 1].observed_at.timestamp()
+                    if r_ts < iv_start_ts < next_ts:
+                        used_record_ids.add(r.event_id)
+                        used_record_ids.add(ref_readings[i + 1].event_id)
+                        used_timestamps.append(r.observed_at)
+                        used_timestamps.append(ref_readings[i + 1].observed_at)
+                    if r_ts < iv_end_ts < next_ts:
+                        used_record_ids.add(r.event_id)
+                        used_record_ids.add(ref_readings[i + 1].event_id)
+                        used_timestamps.append(r.observed_at)
+                        used_timestamps.append(ref_readings[i + 1].observed_at)
+    else:
+        # No valid interpolated intervals (e.g. out-of-range readings across unobserved gaps)
+        for r in ref_readings:
+            if _out_of_range(r.temperature_c, policy.min_c, policy.max_c):
                 used_record_ids.add(r.event_id)
-                used_record_ids.add(ref_readings[i + 1].event_id)
                 used_timestamps.append(r.observed_at)
-                used_timestamps.append(ref_readings[i + 1].observed_at)
-            if r_ts < w_end_ts < next_ts:
-                used_record_ids.add(r.event_id)
-                used_record_ids.add(ref_readings[i + 1].event_id)
-                used_timestamps.append(r.observed_at)
-                used_timestamps.append(ref_readings[i + 1].observed_at)
 
     sorted_door_events = sorted(door_events, key=lambda e: (e.observed_at, e.event_id))
     open_events = [e for e in sorted_door_events if e.value == "open"]
     close_events = [e for e in sorted_door_events if e.value == "closed"]
 
     # 1. Door opening before rise
-    prior_open = [e for e in open_events if e.observed_at <= t_rise]
+    prior_open = (
+        [e for e in open_events if e.observed_at <= t_rise]
+        if t_rise is not None
+        else []
+    )
+
     if prior_open:
         open_event = max(prior_open, key=lambda e: e.observed_at)
         door_opened_before_rise = True
@@ -658,33 +712,45 @@ def _compute_door_temporal_facts(
         else:
             door_closed_at = ctx.snapshot.cutoff_at
 
-        overlap_start = max(open_event.observed_at, t_rise)
-        overlap_end = min(door_closed_at, t_fall)
-        if overlap_start <= overlap_end:
-            overlap_duration = round((overlap_end - overlap_start).total_seconds(), 1)
+        door_open_ts = open_event.observed_at.timestamp()
+        door_close_ts = door_closed_at.timestamp()
+
+        # Calculate overlap strictly from observed or validly interpolated intervals
+        overlap_segments: list[tuple[float, float]] = []
+        for v_start, v_end in valid_intervals:
+            ov_start = max(door_open_ts, v_start)
+            ov_end = min(door_close_ts, v_end)
+            if ov_start < ov_end:
+                overlap_segments.append((ov_start, ov_end))
+
+        if overlap_segments:
+            ov_s = overlap_segments[0][0]
+            ov_e = overlap_segments[-1][1]
+            overlap_duration = round(sum(e - s for s, e in overlap_segments), 1)
+            start_dt = datetime.fromtimestamp(ov_s, tz=tz)
+            end_dt = datetime.fromtimestamp(ov_e, tz=tz)
             overlap_interval = {
-                "start_at": overlap_start.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "end_at": overlap_end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "start_at": start_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "end_at": end_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "duration_seconds": overlap_duration,
             }
-            used_timestamps.append(overlap_start)
-            used_timestamps.append(overlap_end)
+            used_timestamps.append(start_dt)
+            used_timestamps.append(end_dt)
 
     # 3. Recovery after close
     # Only applies if door closed during an ongoing excursion, and temperature
     # recovered back to normal range before cutoff (not censored at end).
     temperature_recovered_after_close = False
     recovery_time_seconds: float | None = None
-    if (
-        close_event
-        and t_rise <= close_event.observed_at < t_fall
-        and not ref_measurement.censored_end
-    ):
-        temperature_recovered_after_close = True
-        recovery_time_seconds = round(
-            (t_fall - close_event.observed_at).total_seconds(), 1
-        )
-        used_timestamps.append(t_fall)
+    if close_event and not ref_measurement.censored_end and valid_intervals:
+        close_ts = close_event.observed_at.timestamp()
+        for v_start, v_end in valid_intervals:
+            if v_start <= close_ts < v_end:
+                temperature_recovered_after_close = True
+                recovery_time_seconds = round(v_end - close_ts, 1)
+                recovery_dt = datetime.fromtimestamp(v_end, tz=tz)
+                used_timestamps.append(recovery_dt)
+                break
 
     # Narrative describing temporal association without claiming causation
     parts: list[str] = []
