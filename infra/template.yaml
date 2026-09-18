@@ -274,11 +274,25 @@ Resources:
               Resource:
                 - !Sub ${ArtifactBucket.Arn}/snapshots/*
                 - !Sub ${ArtifactBucket.Arn}/reports/*
-            - Effect: Allow
-              Action:
-                - bedrock:InvokeModel
-                - bedrock:InvokeModelWithResponseStream
-              Resource: !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${BedrockModelId}
+            # Granted only when Bedrock is enabled: the deterministic default must
+            # not ship a permission it cannot use.
+            #
+            # Both ARN shapes are required. A system-defined inference profile such as
+            # us.amazon.nova-lite-v1:0 is invoked through the inference-profile ARN,
+            # but Bedrock also authorizes against the underlying foundation model in
+            # each region the profile routes to, so granting only one of them fails
+            # with AccessDenied.
+            - !If
+              - BedrockEnabled
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource:
+                  - !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${BedrockModelId}
+                  - !Sub arn:${AWS::Partition}:bedrock:*::foundation-model/${BedrockModelId}
+                  - !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${BedrockModelId}
+              - !Ref AWS::NoValue
       Events:
         Investigation:
           Type: SQS
