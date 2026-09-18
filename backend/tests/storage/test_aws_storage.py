@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import date
 
 import pytest
@@ -207,10 +208,7 @@ def test_idempotent_retry_wins_over_other_transaction_conflicts() -> None:
             }
         },
     )
-    assert (
-        _storage(dynamo).create_or_get_run("operator", "key", "hash", metadata).run_id
-        == run_id
-    )
+    assert _storage(dynamo).create_or_get_run("operator", "key", "hash", metadata).run_id == run_id
 
 
 def test_canonical_artifacts_round_trip_and_are_immutable(snapshot, report) -> None:
@@ -239,6 +237,21 @@ def test_digest_not_found_and_provider_failures_use_canonical_errors(report) -> 
         storage.get_report(reference)
 
 
+@pytest.mark.parametrize("payload", [b"{", b"[]", b"{}"])
+def test_schema_corrupt_s3_objects_are_explicit_conflicts(report, payload: bytes) -> None:
+    s3 = FakeS3()
+    storage = _storage(s3=s3)
+    reference = storage.put_report(report)
+    s3.corrupt_reads[reference.key] = payload
+    matching_reference = ArtifactRef(
+        key=reference.key,
+        sha256=hashlib.sha256(payload).hexdigest(),
+    )
+
+    with pytest.raises(StateConflictError, match="artifact"):
+        storage.get_report(matching_reference)
+
+
 def test_report_signer_uses_exact_key_and_bounded_expiry(report) -> None:
     s3 = FakeS3()
     storage = _storage(s3=s3)
@@ -258,9 +271,7 @@ def test_report_signer_uses_exact_key_and_bounded_expiry(report) -> None:
         )
 
 
-def test_completion_rejects_another_runs_report(
-    snapshot: Snapshot, report: Report
-) -> None:
+def test_completion_rejects_another_runs_report(snapshot: Snapshot, report: Report) -> None:
     dynamo = RecordingDynamo()
     s3 = FakeS3()
     storage = _storage(dynamo=dynamo, s3=s3)
@@ -304,6 +315,30 @@ def test_completion_rejects_another_runs_report(
     assert [method for method, _ in dynamo.calls] == ["get_item"]
 
 
+def test_missing_s3_report_cannot_update_run_to_completed(snapshot: Snapshot) -> None:
+    dynamo = RecordingDynamo()
+    storage = _storage(dynamo=dynamo, s3=FakeS3())
+    run_id = stable_uuid("aws-run-missing-report")
+    snapshot_ref = ArtifactRef(
+        key=f"snapshots/{snapshot.snapshot_id}.json",
+        sha256="1" * 64,
+    )
+    dynamo.queue_response(
+        "get_item",
+        {"Item": _run_item(run_id, snapshot, snapshot_ref)},
+    )
+    missing_ref = ArtifactRef(
+        key=f"reports/{stable_uuid('aws-missing-report')}.json",
+        sha256="0" * 64,
+    )
+
+    with pytest.raises(NotFoundError, match="artifact"):
+        storage.complete_run(
+            run_id, "attempt", RunStatus.completed, missing_ref, "must not complete"
+        )
+    assert [method for method, _ in dynamo.calls] == ["get_item"]
+
+
 def test_completion_releases_matching_lease_and_allows_immediate_next_run(
     snapshot: Snapshot, report: Report
 ) -> None:
@@ -330,9 +365,7 @@ def test_completion_releases_matching_lease_and_allows_immediate_next_run(
     delete_call = next(call for method, call in dynamo.calls if method == "delete_item")
     assert delete_call["ConditionExpression"] == "run_id = :run_id"
 
-    next_run = storage.create_or_get_run(
-        "operator", "next-request", "next-hash", run_metadata()
-    )
+    next_run = storage.create_or_get_run("operator", "next-request", "next-hash", run_metadata())
     assert dynamo.active_run_id == next_run.run_id
     assert next_run.run_id != run_id
 
