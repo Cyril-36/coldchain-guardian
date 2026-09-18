@@ -1,55 +1,72 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid5
 
 import pytest
 
+from coldchain.contracts.schemas import Report, Snapshot
 from coldchain.simulator import generate_snapshot
 from coldchain.storage import MemoryStorage
 
 TEST_NAMESPACE = UUID("09b35277-9d02-470b-9f42-5aa7b37a0c93")
 BASE_TIME = datetime(2026, 9, 17, 10, 0, tzinfo=UTC)
+NOW = datetime(2026, 9, 17, 12, 0, tzinfo=UTC)
 
 
 def stable_uuid(name: str) -> str:
     return str(uuid5(TEST_NAMESPACE, name))
 
 
+def run_metadata(**overrides: Any) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "scenario_id": "normal_control",
+        "seed": 17,
+        "base_timestamp": BASE_TIME,
+    }
+    metadata.update(overrides)
+    return metadata
+
+
 @pytest.fixture
-def snapshot() -> dict[str, Any]:
-    return generate_snapshot(
-        "normal_control",
-        17,
-        BASE_TIME,
-        snapshot_id=stable_uuid("snapshot"),
-        shipment_id=stable_uuid("shipment"),
+def snapshot() -> Snapshot:
+    return Snapshot.model_validate(
+        generate_snapshot(
+            "normal_control",
+            17,
+            BASE_TIME,
+            snapshot_id=stable_uuid("snapshot"),
+            shipment_id=stable_uuid("shipment"),
+        )
     )
 
 
 @pytest.fixture
-def report(snapshot: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "report_id": stable_uuid("report"),
-        "snapshot_id": snapshot["snapshot_id"],
-        "schema_version": "1.0",
-        "outcome": "no_excursion",
-    }
+def report() -> Report:
+    path = Path(__file__).parents[3] / "contracts" / "examples" / "normal-report.json"
+    return Report.model_validate(json.loads(path.read_text(encoding="utf-8")))
 
 
 @pytest.fixture
 def memory() -> MemoryStorage:
-    counter = iter(range(100))
-    return MemoryStorage(id_factory=lambda: stable_uuid(f"generated-{next(counter)}"))
+    counter = iter(range(200))
+    return MemoryStorage(
+        id_factory=lambda: stable_uuid(f"generated-{next(counter)}"),
+        clock=lambda: NOW,
+    )
 
 
 class FakeAwsError(Exception):
     def __init__(
         self, code: str, cancellation_reasons: list[dict[str, str]] | None = None
     ) -> None:
-        self.response = {"Error": {"Code": code, "Message": "provider detail"}}
+        self.response: dict[str, Any] = {
+            "Error": {"Code": code, "Message": "provider detail"}
+        }
         if cancellation_reasons is not None:
             self.response["CancellationReasons"] = cancellation_reasons
         super().__init__("provider detail must not escape")
@@ -101,11 +118,11 @@ class RecordingDynamo:
 
     def _call(self, method: str, kwargs: dict[str, Any]) -> dict[str, Any]:
         self.calls.append((method, kwargs))
-        queued_errors = self.errors.get(method, [])
-        if queued_errors:
-            raise queued_errors.pop(0)
-        queued_responses = self.responses.get(method, [])
-        return queued_responses.pop(0) if queued_responses else {}
+        if errors := self.errors.get(method):
+            raise errors.pop(0)
+        if responses := self.responses.get(method):
+            return responses.pop(0)
+        return {}
 
     def transact_write_items(self, **kwargs: Any) -> dict[str, Any]:
         return self._call("transact_write_items", kwargs)

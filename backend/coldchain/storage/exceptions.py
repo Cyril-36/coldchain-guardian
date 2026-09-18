@@ -1,49 +1,96 @@
-"""Stable storage errors that do not expose provider exception details."""
+"""Storage exception hierarchy for ColdChain Guardian.
+
+These standard exceptions allow storage adapters (AWS DynamoDB/S3 or in-memory)
+and API handlers to raise and map structured, typed errors with predictable
+HTTP status codes and retry semantics without coupling to adapter implementations.
+
+HTTP status mapping per docs/CONTRACTS.md:
+- 404: NotFoundError (missing run, snapshot, report, or artifact)
+- 409: StateConflictError, IdempotencyConflictError,
+  ConditionalCheckFailedError, ReportNotReadyError
+- 429: LimitExceededError, DailyLimitExceededError, ActiveRunLimitExceededError
+- 503: TemporaryStorageError, QueueError, TemporaryEnqueueError (retryable)
+"""
+
+from __future__ import annotations
 
 
-class StorageError(RuntimeError):
-    """Base class for storage failures."""
+class StorageError(Exception):
+    """Base exception for all ColdChain storage and queue failures."""
+
+    status_code: int = 500
+    retryable: bool = False
 
 
-class IdempotencyConflict(StorageError):
-    """An idempotency key was reused with a different request hash."""
+# ── 404 Not Found ─────────────────────────────────────────────────────────────
 
 
-class ConditionalWriteConflict(StorageError):
-    """A conditional state update was rejected."""
+class NotFoundError(StorageError, KeyError):
+    """Raised when a requested run, snapshot, report, or artifact does not exist."""
+
+    status_code: int = 404
+    retryable: bool = False
 
 
-class LeaseConflict(ConditionalWriteConflict):
-    """A valid lease is held by another attempt."""
+# ── 409 State / Concurrency / Idempotency Conflicts ──────────────────────────
 
 
-class ActiveRunConflict(ConditionalWriteConflict):
-    """An operator already holds a valid active-run lease."""
+class StateConflictError(StorageError, ValueError):
+    """Base class for 409 conflicts (idempotency, concurrency race, report not ready)."""
+
+    status_code: int = 409
+    retryable: bool = False
 
 
-class DailyLimitExceeded(ConditionalWriteConflict):
-    """The UTC daily run limit has been reached."""
+class IdempotencyConflictError(StateConflictError):
+    """Raised when an idempotency key is reused with a different request payload or hash."""
 
 
-class ImmutableArtifactConflict(ConditionalWriteConflict):
-    """An immutable artifact key already contains different bytes."""
+class ConditionalCheckFailedError(StateConflictError):
+    """Raised when an optimistic concurrency or lease check fails (e.g., stale attempt)."""
 
 
-class ArtifactNotFound(StorageError):
-    """The requested immutable artifact does not exist."""
+class ReportNotReadyError(StateConflictError):
+    """Raised when GET /runs/{id}/report or /download is requested before report is ready."""
 
 
-class ArtifactDigestMismatch(StorageError):
-    """Stored artifact bytes do not match the expected digest."""
+# ── 429 Limit Conflicts ───────────────────────────────────────────────────────
 
 
-class RunNotFound(StorageError):
-    """The requested run does not exist."""
+class LimitExceededError(StorageError):
+    """Base exception for 429 quota and concurrency limits."""
+
+    status_code: int = 429
+    retryable: bool = False
 
 
-class ReviewConflict(ConditionalWriteConflict):
-    """A review does not reference the run's current report."""
+class DailyLimitExceededError(LimitExceededError):
+    """Raised when daily run creation cap is reached (e.g., MAX_RUNS_PER_DAY=50)."""
 
 
-class StorageUnavailable(StorageError):
-    """The storage provider failed for a reason callers may retry."""
+class ActiveRunLimitExceededError(LimitExceededError):
+    """Raised when concurrent active runs for an operator or account are exceeded."""
+
+
+# ── 503 Temporary Failures ────────────────────────────────────────────────────
+
+
+class TemporaryStorageError(StorageError):
+    """Raised when a transient DynamoDB or S3 failure occurs."""
+
+    status_code: int = 503
+    retryable: bool = True
+
+
+class QueueError(StorageError):
+    """Base exception for queue publishing or polling failures."""
+
+    status_code: int = 503
+    retryable: bool = True
+
+
+class TemporaryEnqueueError(QueueError, TemporaryStorageError):
+    """Raised when dispatching to SQS fails temporarily and should be retried."""
+
+    status_code: int = 503
+    retryable: bool = True

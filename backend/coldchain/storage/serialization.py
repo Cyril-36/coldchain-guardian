@@ -1,29 +1,24 @@
-"""Canonical JSON serialization and digest verification."""
+"""Canonical Pydantic artifact serialization and digest verification."""
 
 from __future__ import annotations
 
 import hashlib
 import json
 from collections.abc import Callable, Mapping
-from copy import deepcopy
-from typing import Any
+from typing import Any, TypeVar
 
-from .exceptions import ArtifactDigestMismatch
+from pydantic import BaseModel
 
-ArtifactValidator = Callable[[Mapping[str, Any]], dict[str, Any]]
+from .exceptions import StateConflictError
 
-
-def copy_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
-    """Default validator used until a canonical report model is published."""
-
-    return deepcopy(dict(value))
+ArtifactModel = TypeVar("ArtifactModel", bound=BaseModel)
+ArtifactValidator = Callable[[Any], BaseModel]
 
 
-def canonical_json_bytes(value: Mapping[str, Any]) -> bytes:
-    """Serialize deterministic UTF-8 JSON, rejecting NaN and non-JSON values."""
-
+def canonical_json_bytes(value: BaseModel | Mapping[str, Any]) -> bytes:
+    data = value.model_dump(mode="json") if isinstance(value, BaseModel) else dict(value)
     return json.dumps(
-        value,
+        data,
         allow_nan=False,
         ensure_ascii=False,
         separators=(",", ":"),
@@ -35,15 +30,13 @@ def sha256_hex(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def deserialize_verified(
+def deserialize_verified(  # noqa: UP047 - package remains Python 3.11 compatible
     payload: bytes,
     expected_sha256: str,
-    validator: ArtifactValidator,
-) -> dict[str, Any]:
-    """Verify byte identity before deserializing and validating an artifact."""
-
+    validator: Callable[[Any], ArtifactModel],
+) -> ArtifactModel:
     if sha256_hex(payload) != expected_sha256:
-        raise ArtifactDigestMismatch("artifact digest does not match stored bytes")
+        raise StateConflictError("artifact digest does not match stored bytes")
     decoded = json.loads(payload.decode("utf-8"))
     if not isinstance(decoded, dict):
         raise ValueError("artifact root must be a JSON object")

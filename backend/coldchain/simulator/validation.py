@@ -96,7 +96,7 @@ def _parse_timestamp(value: Any, location: str) -> datetime:
 
 
 def _require_finite_number(value: Any, location: str) -> float | int:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if isinstance(value, bool) or not isinstance(value, int | float):
         raise SnapshotValidationError(f"{location} must be numeric")
     if not math.isfinite(value):
         raise SnapshotValidationError(f"{location} must be finite")

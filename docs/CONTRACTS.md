@@ -43,7 +43,7 @@ Detector is a pure function of snapshot and policy, with a version number.
 3. For consecutive samples of the same sensor separated by at most max_gap_seconds, use linear interpolation to estimate threshold crossings. Integrate the out-of-range portion of each valid interval.
 4. For wider gaps, do not interpolate. Record `unknown_duration_seconds` and disjoint intervals. State the duration as an estimate over observed coverage, never as an exact total exposure.
 5. If the first/last sample is outside range, mark the interval left/right-censored; do not extrapolate outside the snapshot.
-6. Report `first_observed_out_at`, `last_observed_out_at`, `estimated_out_of_range_seconds`, `unknown_duration_seconds`, `sample_count`, `observed_min_c`, `observed_max_c`, `censored_start`, `censored_end`, `coverage_status` per sensor.
+6. Report `first_observed_out_at`, `last_observed_out_at`, `estimated_out_of_range_seconds`, `unknown_duration_seconds`, `sample_count`, `observed_min_c`, `observed_max_c`, `censored_start`, `censored_end`, `coverage_status` (`complete`, `partial`, `insufficient`) per sensor.
 7. A normal control returns `no_excursion` and skips Bedrock. A sensor-only anomaly still requires review; normal comparison data is not proof that the reference or product is safe.
 8. If a dataset contains multiple separate excursion windows beyond the MVP's single-window assumption, return `needs_review` with `multiple_windows_unsupported`; do not collapse them into one invented incident.
 
@@ -51,7 +51,7 @@ Each metric links to the readings used. Backend owns rounding (seconds to 1 deci
 
 ## Evidence and report
 
-EvidenceRef: `evidence_id`, `snapshot_id`, `kind` (`reading/event/derived_metric/policy`), `record_ids`, `observed_at` or interval, `summary`. Derived evidence additionally includes `method_version` and the input record IDs. Tools return these references alongside values.
+EvidenceRef: `evidence_id`, `snapshot_id`, `kind` (`reading/event/derived_metric/policy`), `record_ids`, `observed_at` or interval (`start_at`, `end_at`), `summary`. Derived evidence additionally includes `method_version` and the input record IDs. Tools return these references alongside values.
 
 Report fields:
 
@@ -60,11 +60,12 @@ Report fields:
 - outcome: `hypothesis_supported`, `unresolved`, or `no_excursion`.
 - primary_hypothesis: `door_exposure`, `refrigeration_problem`, `sensor_disagreement`, or null.
 - hypotheses: each has the same hypothesis enum, assessment (`supported/contradicted/insufficient`), supporting_evidence_ids, conflicting_evidence_ids, missing_evidence and a short explanation.
-- next_checks: structured action code, reason and related evidence IDs. Allowed codes: `inspect_door`, `check_refrigeration`, `verify_sensor`, `request_missing_logs`, `quality_review`.
+- next_checks: structured objects with `code` (allowed: `inspect_door`, `check_refrigeration`, `verify_sensor`, `request_missing_logs`, `quality_review`; accepts alias `action_code`), `reason` (string), and `related_evidence_ids` (list of UUIDs; accepts alias `evidence_ids`).
 - limitations: strings, including simulation and any data gaps.
 - verification: status (`passed/blocked`), errors and warnings. “Passed” means schema/numeric/reference checks passed; it does not certify the cause.
 - generation_mode: `bedrock` or `deterministic_only`.
 - review_required: always true for an anomaly; false for a normal control does not certify product viability.
+- evidence: list of frozen `EvidenceRef` items cited by the report. Provenance validation strictly rejects reports where hypotheses, next checks, or measurements cite evidence IDs not present in this list or matching snapshot ID.
 
 The LLM outputs only a proposed hypothesis structure. The backend injects verified metrics, provenance and final status. Report contains no “safe to use”, release/discard instruction, calibrated probability or invented facts. Render unsupported narrative as blocked, not as a finding with a tiny warning.
 
@@ -106,12 +107,14 @@ Same user + same Idempotency-Key + same body returns the same run. Same key with
 
 Polling: 2 seconds while visible/running; back off to 5 seconds after 30 seconds. Stop at terminal state. Browser timeout shows “still processing” and offers refresh; it does not mark the backend failed.
 
-## Storage interface
+## Storage and queue interfaces
 
-Leader publishes Protocol definitions and a memory implementation before backend teammate begins AWS adapter integration:
+Leader publishes Protocol definitions (and later a memory implementation) before backend teammate begins AWS adapter integration:
 
 ```text
+# StorageProtocol (persistence)
 create_or_get_run(owner_sub, idempotency_key, request_hash, metadata) -> Run
+attach_snapshot(run_id, snapshot_ref) -> None
 put_snapshot(snapshot) -> ArtifactRef(key, sha256)
 get_snapshot(snapshot_ref) -> Snapshot
 get_run(run_id) -> Run | None
@@ -123,8 +126,29 @@ put_report(report) -> ArtifactRef(key, sha256)
 get_report(report_ref) -> Report
 save_review(run_id, actor_sub, report_id, decision, note) -> Review
 list_public_runs() -> list[RunSummary]
-enqueue_run(run_id, snapshot_id, schema_version) -> None
+mark_queued(run_id) -> None
+create_report_download_url(report_ref, expires_in_seconds=300) -> str
+
+# QueueSenderProtocol (message dispatch)
+send_run(run_id, snapshot_id, schema_version="1.0") -> None
+
+# ArtifactSignerProtocol (short-lived artifact URLs)
+create_report_download_url(report_ref, expires_in_seconds=300) -> str
 ```
+
+In the state machine flow, `attach_snapshot(run_id, snapshot_ref)` explicitly records the durable snapshot artifact reference on the pending run prior to queue dispatch. To guarantee crash recovery between run reservation and snapshot attachment, `create_or_get_run` requires `metadata` to include `scenario_id`, `seed`, and `base_timestamp` (or `preparation: PreparationRecord`). The storage adapter atomically persists these fields in the `RUN#uuid/META` item alongside `IDEMP#user#hash/REQUEST` within a DynamoDB transaction. If an API process crashes after run reservation but before `attach_snapshot`, the subsequent `create_or_get_run` retry retrieves the existing `Run` which returns the exact same `seed` and `base_timestamp` (via `run.seed`, `run.base_timestamp`, or `run.to_preparation_record()`), ensuring 100% deterministic snapshot regeneration. `Run` enforces that all three preparation fields must be present together.
+
+Queue delivery is separated from storage state transitions: `QueueSenderProtocol.send_run(...)` publishes the job message to SQS. On send failure, the run remains in `pending_enqueue` and raises retryable `TemporaryEnqueueError` (HTTP 503). On send success, `storage.mark_queued(run_id)` conditionally transitions status to `queued` only if still in `pending_enqueue`/`preparing`, and must never regress if the run is already claimed, running, or terminal.
+
+Report download signing is provided via `create_report_download_url(report_ref, expires_in_seconds=300)` on `StorageProtocol` and `ArtifactSignerProtocol` to generate a narrow, short-lived 5-minute pre-signed URL for the validated report artifact.
+
+Storage and API exception hierarchy maps directly to HTTP status codes:
+- 404: `NotFoundError` (missing run, snapshot, report, or artifact)
+- 409: `StateConflictError`, `IdempotencyConflictError`, `ConditionalCheckFailedError`, `ReportNotReadyError`
+- 429: `LimitExceededError`, `DailyLimitExceededError`, `ActiveRunLimitExceededError`
+- 503: `TemporaryStorageError`, `QueueError`, `TemporaryEnqueueError` (`retryable = True`)
+
+In `claim_run`, `now` is a timezone-aware UTC datetime and `lease_seconds` is integer duration. `Review` contains `review_id`, `run_id`, `actor_sub`, `report_id`, `decision`, `note` (max 1,000 chars), and `reviewed_at` (accepts alias `created_at`).
 
 Use one DynamoDB table: `RUN#uuid/META`, `RUN#uuid/REVIEW#uuid`, `IDEMP#user#hash/REQUEST`, `LIMIT#date/COUNT`, `ACTIVE#user/LEASE`, `PUBLIC/DEMO#run_id`. Define transactional writes for idempotency/caps and conditional writes for claims. No scans in request paths. Put telemetry in S3, not a giant DynamoDB item. S3 keys use opaque snapshot/report IDs; report objects are immutable.
 

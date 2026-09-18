@@ -1,0 +1,42 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #0f172a; background: #f8fafc; font-synthesis: none; text-rendering: optimizeLegibility; }
+* { box-sizing: border-box; }
+html, body, #root { min-height: 100%; margin: 0; }
+body { background: #f8fafc; }
+button, select, textarea { font: inherit; }
+button { cursor: pointer; }
+button:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid #0891b2; outline-offset: 2px; }
+button:disabled { cursor: not-allowed; }
+
+.print-report { display: none; }
+
+@media print {
+  @page { size: A4; margin: 14mm; }
+  html, body, #root { background: white !important; }
+  body { color: #0f172a; }
+  .dashboard-chrome, .dashboard-content { display: none !important; }
+  .print-report { display: block !important; font-family: Inter, Arial, sans-serif; font-size: 10pt; line-height: 1.45; color: #0f172a; }
+  .print-report-header { display: flex; justify-content: space-between; gap: 24px; border-bottom: 2px solid #123B5D; padding-bottom: 12px; }
+  .print-report-header h1 { margin: 2px 0 4px; font-size: 20pt; }
+  .print-report-header p { margin: 0; color: #475569; }
+  .print-kicker { color: #123B5D !important; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; font-size: 8pt; }
+  .print-meta { display: grid; grid-template-columns: auto auto; gap: 2px 10px; align-content: start; font-size: 8pt; }
+  .print-meta strong, .print-grid strong { color: #475569; }
+  .print-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 18px; margin-top: 14px; }
+  .print-grid div { display: flex; flex-direction: column; gap: 2px; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px; }
+  .print-section { break-inside: avoid; margin-top: 16px; }
+  .print-section h2 { margin: 0 0 7px; font-size: 12pt; border-bottom: 1px solid #cbd5e1; padding-bottom: 4px; }
+  .print-section p { margin: 5px 0; }
+  .print-section ul { margin: 5px 0; padding-left: 18px; }
+  .print-section li { margin: 3px 0; }
+  .print-footer { display: flex; justify-content: space-between; gap: 20px; border-top: 1px solid #cbd5e1; margin-top: 20px; padding-top: 8px; color: #64748b; font-size: 8pt; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}

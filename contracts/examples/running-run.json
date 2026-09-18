@@ -1,0 +1,46 @@
+{
+  "run_id": "8c0a2b91-4d1e-450a-9d21-f8a1e2b3c4d5",
+  "status": "running",
+  "stage": "collecting_evidence",
+  "created_at": "2026-09-17T10:45:05Z",
+  "completed_at": null,
+  "report_id": null,
+  "review": null,
+  "generation_mode": "bedrock",
+  "shipment_id": "fc90f5ba-5a1e-5913-851b-77312233316f",
+  "snapshot_id": "27b7281c-f4f5-5165-a244-10d1010db2bc",
+  "stage_events": [
+    {
+      "event_id": "e1000000-0000-4000-8000-000000000001",
+      "stage": "preparing",
+      "tool_name": null,
+      "started_at": "2026-09-17T10:45:06Z",
+      "finished_at": "2026-09-17T10:45:07Z",
+      "status": "completed",
+      "evidence_ids": []
+    },
+    {
+      "event_id": "e1000000-0000-4000-8000-000000000002",
+      "stage": "detecting",
+      "tool_name": null,
+      "started_at": "2026-09-17T10:45:07Z",
+      "finished_at": "2026-09-17T10:45:08Z",
+      "status": "completed",
+      "evidence_ids": [
+        "91000000-0000-4000-8000-000000000001"
+      ]
+    },
+    {
+      "event_id": "e1000000-0000-4000-8000-000000000003",
+      "stage": "collecting_evidence",
+      "tool_name": "get_door_events",
+      "started_at": "2026-09-17T10:45:08Z",
+      "finished_at": null,
+      "status": "started",
+      "evidence_ids": []
+    }
+  ],
+  "report_summary": null,
+  "error": null,
+  "is_public_demo": false
+}

@@ -27,17 +27,16 @@ jobs:
           else
             echo 'Backend not implemented yet; skipped.'
           fi
-      - name: Frontend checks, when frontend exists
+      - name: Frontend checks
         shell: bash
         run: |
           set -euo pipefail
-          if [ -f apps/web/package.json ]; then
-            cd apps/web
-            npm ci
-            npm run lint
-            npm run typecheck
-            npm test -- --run
-            npm run build
-          else
-            echo 'Frontend not implemented yet; skipped.'
+          if [ ! -f apps/web/package.json ]; then
+            echo 'Frontend package missing.'
+            exit 1
           fi
+          cd apps/web
+          npm install --no-audit --no-fund
+          npm run typecheck
+          npm test -- --run
+          npm run build

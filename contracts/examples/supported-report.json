@@ -1,0 +1,178 @@
+{
+  "report_id": "c1000000-0000-4000-8000-000000000001",
+  "run_id": "8c0a2b91-4d1e-450a-9d21-f8a1e2b3c4d5",
+  "snapshot_id": "27b7281c-f4f5-5165-a244-10d1010db2bc",
+  "snapshot_sha256": "1dbe7dc1667e3e5eccb954402eeee1a6b06237001bc82ff6953459d8b3b6c8ea",
+  "schema_version": "1.0",
+  "detector_version": "1.0.0",
+  "prompt_version": "1.0.0",
+  "model_id": "amazon.nova-lite-v1:0",
+  "created_at": "2026-09-17T10:45:45Z",
+  "cutoff_at": "2026-09-17T10:45:00Z",
+  "measurements": [
+    {
+      "sensor_id": "7810cdd7-2451-517a-bcd0-b344b2d85266",
+      "first_observed_out_at": "2026-09-17T10:15:00Z",
+      "last_observed_out_at": "2026-09-17T10:28:00Z",
+      "estimated_out_of_range_seconds": 780.0,
+      "unknown_duration_seconds": 0.0,
+      "sample_count": 46,
+      "observed_min_c": 4.84,
+      "observed_max_c": 12.3,
+      "censored_start": false,
+      "censored_end": false,
+      "coverage_status": "complete",
+      "evidence_ids": [
+        "91000000-0000-4000-8000-000000000001"
+      ]
+    },
+    {
+      "sensor_id": "a8582adc-8b50-5b08-a39d-2ba72a4567c7",
+      "first_observed_out_at": null,
+      "last_observed_out_at": null,
+      "estimated_out_of_range_seconds": 0.0,
+      "unknown_duration_seconds": 0.0,
+      "sample_count": 46,
+      "observed_min_c": 5.04,
+      "observed_max_c": 5.36,
+      "censored_start": false,
+      "censored_end": false,
+      "coverage_status": "complete",
+      "evidence_ids": [
+        "91000000-0000-4000-8000-000000000002"
+      ]
+    }
+  ],
+  "outcome": "hypothesis_supported",
+  "primary_hypothesis": "door_exposure",
+  "hypotheses": [
+    {
+      "hypothesis": "door_exposure",
+      "assessment": "supported",
+      "supporting_evidence_ids": [
+        "91000000-0000-4000-8000-000000000001",
+        "7dada556-2a6f-515f-bb1b-f5bb79819eaf"
+      ],
+      "conflicting_evidence_ids": [],
+      "missing_evidence": [],
+      "explanation": "Recorded cargo door opening at 10:15:00Z aligns with observed temperature spike above 8C on front reference air sensor, with temperature recovery following door closure at 10:28:00Z."
+    },
+    {
+      "hypothesis": "refrigeration_problem",
+      "assessment": "contradicted",
+      "supporting_evidence_ids": [],
+      "conflicting_evidence_ids": [
+        "43470328-4a34-5647-9989-df5e9ecaeebf"
+      ],
+      "missing_evidence": [],
+      "explanation": "Refrigeration controller reported running state without fault codes throughout the excursion interval."
+    },
+    {
+      "hypothesis": "sensor_disagreement",
+      "assessment": "insufficient",
+      "supporting_evidence_ids": [],
+      "conflicting_evidence_ids": [],
+      "missing_evidence": [],
+      "explanation": "Comparison sensor in rear cargo compartment remained shielded from door thermal draft, consistent with localized door exposure rather than sensor calibration failure."
+    }
+  ],
+  "next_checks": [
+    {
+      "code": "inspect_door",
+      "reason": "Inspect door seals and latch mechanism for door seal integrity.",
+      "related_evidence_ids": [
+        "7dada556-2a6f-515f-bb1b-f5bb79819eaf"
+      ]
+    },
+    {
+      "code": "quality_review",
+      "reason": "Conduct quality review of product exposure duration against handling policy tolerance.",
+      "related_evidence_ids": [
+        "91000000-0000-4000-8000-000000000001"
+      ]
+    }
+  ],
+  "limitations": [
+    "Analysis is based on synthetic simulated telemetry.",
+    "Temperature excursion metrics reflect air temperature, not internal product core temperature."
+  ],
+  "verification": {
+    "status": "passed",
+    "errors": [],
+    "warnings": []
+  },
+  "generation_mode": "bedrock",
+  "review_required": true,
+  "evidence": [
+    {
+      "evidence_id": "91000000-0000-4000-8000-000000000001",
+      "snapshot_id": "27b7281c-f4f5-5165-a244-10d1010db2bc",
+      "kind": "derived_metric",
+      "record_ids": [
+        "ca9cfbab-19a2-502e-a1e9-bec30a030241",
+        "adc74345-7136-58a7-ba89-db576cdd0294",
+        "a7f8a485-5862-54cc-b414-eaaf8a92af25",
+        "1be079f8-f3d2-55f2-a98b-fe5764ccc591",
+        "a1863664-a76e-5b75-8927-d43ff9866ed2",
+        "f497681c-aaa6-5845-bd85-7b194acdc37a",
+        "918afdb9-3ec0-57a7-b229-b14fe6a70f93",
+        "cef61329-1cae-57e5-a5a8-d1aee32c801c",
+        "7ed0407b-65d7-5240-900f-cef3d324df91",
+        "47c2e096-de7e-555d-991e-b56ced5b71e3",
+        "75db1f49-f238-5506-b7ea-dd549ff015de",
+        "8db1f346-cec9-5390-aca5-25f3ac01f706",
+        "03e7d215-bf27-55ce-97f8-14d3c160638d",
+        "de8151a8-78f1-5afa-8770-2eef54e66b6c"
+      ],
+      "interval": {
+        "start_at": "2026-09-17T10:15:00Z",
+        "end_at": "2026-09-17T10:28:00Z"
+      },
+      "summary": "Reference air sensor recorded temperature rise above 8.0C for estimated 780s.",
+      "method_version": "1.0.0"
+    },
+    {
+      "evidence_id": "91000000-0000-4000-8000-000000000002",
+      "snapshot_id": "27b7281c-f4f5-5165-a244-10d1010db2bc",
+      "kind": "derived_metric",
+      "record_ids": [
+        "20283da1-6737-5372-9192-3f2a75b917ae",
+        "41cde450-673f-5f8b-807c-2a4273665f89",
+        "9817fd3a-cc4d-52b6-8c89-ffb7e0284500",
+        "0d57925e-83b8-5d2b-b297-0ddbd480ef2d",
+        "5a0ca626-b551-5c7a-985d-f9f51b38710c",
+        "4f2aebcf-37e9-5932-817b-3dc37c0bbf16",
+        "86040493-b99a-51f2-902a-8a7b496bf801",
+        "8ff7fda5-b396-5e40-98ae-00ff02e40369",
+        "95ab8f86-7fea-5f95-9951-10d79fe58e66",
+        "ca89a1be-ce38-547e-8799-82516bd244a5",
+        "b0aae74a-49a4-5702-bcfd-f90b7a25ee0a",
+        "334eb860-7313-5d20-8235-379d105d350d",
+        "1b0d4023-1502-51a6-badd-03297c02765c",
+        "4ab266b9-d099-51a1-b48a-3dbc713e4a83"
+      ],
+      "summary": "Comparison rear air sensor maintained normal temperature range (5.04C - 5.36C).",
+      "method_version": "1.0.0"
+    },
+    {
+      "evidence_id": "7dada556-2a6f-515f-bb1b-f5bb79819eaf",
+      "snapshot_id": "27b7281c-f4f5-5165-a244-10d1010db2bc",
+      "kind": "event",
+      "record_ids": [
+        "7dada556-2a6f-515f-bb1b-f5bb79819eaf"
+      ],
+      "observed_at": "2026-09-17T10:15:00Z",
+      "summary": "Cargo door transition to open state recorded by simulated controller."
+    },
+    {
+      "evidence_id": "43470328-4a34-5647-9989-df5e9ecaeebf",
+      "snapshot_id": "27b7281c-f4f5-5165-a244-10d1010db2bc",
+      "kind": "event",
+      "record_ids": [
+        "43470328-4a34-5647-9989-df5e9ecaeebf"
+      ],
+      "observed_at": "2026-09-17T10:00:00Z",
+      "summary": "Refrigeration unit operating in continuous running state."
+    }
+  ]
+}
