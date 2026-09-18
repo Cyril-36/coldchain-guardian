@@ -33,7 +33,12 @@ from .exceptions import (
     StateConflictError,
     TemporaryStorageError,
 )
-from .serialization import canonical_json_bytes, deserialize_verified, sha256_hex
+from .serialization import (
+    canonical_json_bytes,
+    deserialize_verified,
+    sha256_hex,
+    validate_report_binding,
+)
 
 _Model = TypeVar("_Model", bound=BaseModel)
 _CONDITIONAL_CODES = {
@@ -530,6 +535,22 @@ class AwsStorage:
         status = RunStatus(status)
         if status not in _TERMINAL:
             raise ValueError("completion status must be terminal")
+        run = self.get_run(run_id)
+        if run is None:
+            raise NotFoundError("run does not exist")
+        if run.status in _TERMINAL:
+            if (
+                run.status == status
+                and run.attempt_id == attempt_id
+                and run.report_ref == report_ref
+            ):
+                if run.owner_sub:
+                    self.release_active_run(run.owner_sub, run_id)
+                return
+            raise ConditionalCheckFailedError(
+                "run already has a different terminal result"
+            )
+
         values: dict[str, Any] = {
             ":running": _s(RunStatus.running.value),
             ":attempt": _s(attempt_id),
@@ -544,8 +565,10 @@ class AwsStorage:
             "SET #status = :terminal, stage = :stage, stage_order = :stage_order, "
             "completed_at = :completed"
         )
+        condition = "#status = :running AND attempt_id = :attempt"
         if report_ref is not None:
             report = self.get_report(report_ref)
+            validate_report_binding(run, report)
             expression += (
                 ", report_key = :report_key, report_sha256 = :report_sha256, "
                 "report_id = :report_id, generation_mode = :generation_mode, "
@@ -564,7 +587,13 @@ class AwsStorage:
                             review_required=report.review_required,
                         ).model_dump_json()
                     ),
+                    ":snapshot_id": _s(report.snapshot_id),
+                    ":snapshot_sha256": _s(report.snapshot_sha256),
                 }
+            )
+            condition += (
+                " AND snapshot_id = :snapshot_id "
+                "AND snapshot_sha256 = :snapshot_sha256"
             )
         elif status == RunStatus.failed:
             expression += ", error_json = :error"
@@ -583,23 +612,30 @@ class AwsStorage:
                 TableName=self._table_name,
                 Key=self._run_key(run_id),
                 UpdateExpression=expression,
-                ConditionExpression="#status = :running AND attempt_id = :attempt",
+                ConditionExpression=condition,
                 ExpressionAttributeNames={"#status": "status"},
                 ExpressionAttributeValues=values,
             )
-            return
         except Exception as error:
             if _error_code(error) not in _CONDITIONAL_CODES:
                 self._raise_provider("complete run", error)
-        run = self.get_run(run_id)
-        if (
-            run
-            and run.status == status
-            and run.attempt_id == attempt_id
-            and run.report_ref == report_ref
-        ):
-            return
-        raise ConditionalCheckFailedError("run completion is stale or contradictory")
+            current = self.get_run(run_id)
+            if not (
+                current
+                and current.status == status
+                and current.attempt_id == attempt_id
+                and current.report_ref == report_ref
+            ):
+                raise ConditionalCheckFailedError(
+                    "run completion is stale or contradictory"
+                ) from error
+            run = current
+
+        # A run completion must never delete an active lease belonging to a newer
+        # run. release_active_run uses a run_id condition and treats a mismatch as
+        # an already-replaced lease, so completion remains successful in that case.
+        if run.owner_sub:
+            self.release_active_run(run.owner_sub, run_id)
 
     def _put_artifact(
         self,

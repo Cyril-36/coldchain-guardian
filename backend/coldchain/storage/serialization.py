@@ -9,10 +9,33 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel
 
-from .exceptions import StateConflictError
+from coldchain.contracts.schemas import Report, Run
+
+from .exceptions import ConditionalCheckFailedError, StateConflictError
 
 ArtifactModel = TypeVar("ArtifactModel", bound=BaseModel)
 ArtifactValidator = Callable[[Any], BaseModel]
+
+
+def validate_report_binding(run: Run, report: Report) -> None:
+    """Require a report to describe the run's exact frozen snapshot."""
+    if run.snapshot_ref is None:
+        raise ConditionalCheckFailedError(
+            "run cannot complete before its snapshot reference is attached"
+        )
+
+    mismatches: list[str] = []
+    if report.run_id != run.run_id:
+        mismatches.append("run_id")
+    if report.snapshot_id != run.snapshot_id:
+        mismatches.append("snapshot_id")
+    if report.snapshot_sha256 != run.snapshot_ref.sha256:
+        mismatches.append("snapshot_sha256")
+    if mismatches:
+        raise ConditionalCheckFailedError(
+            "report does not match the current run and attached snapshot: "
+            + ", ".join(mismatches)
+        )
 
 
 def canonical_json_bytes(value: BaseModel | Mapping[str, Any]) -> bytes:

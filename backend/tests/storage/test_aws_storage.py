@@ -4,11 +4,19 @@ from datetime import date
 
 import pytest
 
-from coldchain.contracts.enums import Outcome, PublicStage, ReviewDecision, StageEventStatus
-from coldchain.contracts.schemas import ArtifactRef, StageEvent
+from coldchain.contracts.enums import (
+    Outcome,
+    PublicStage,
+    ReviewDecision,
+    RunStatus,
+    StageEventStatus,
+)
+from coldchain.contracts.schemas import ArtifactRef, Report, Snapshot, StageEvent
+from coldchain.simulator import generate_snapshot
 from coldchain.storage import (
     ActiveRunLimitExceededError,
     AwsStorage,
+    ConditionalCheckFailedError,
     DailyLimitExceededError,
     NotFoundError,
     StateConflictError,
@@ -35,6 +43,89 @@ def _storage(dynamo=None, s3=None) -> AwsStorage:
         id_factory=lambda: next(ids),
         clock=lambda: NOW,
     )
+
+
+def _run_item(
+    run_id: str,
+    snapshot: Snapshot,
+    snapshot_ref: ArtifactRef,
+    *,
+    owner_sub: str = "operator",
+    attempt_id: str = "attempt",
+) -> dict:
+    return {
+        "PK": {"S": f"RUN#{run_id}"},
+        "SK": {"S": "META"},
+        "run_id": {"S": run_id},
+        "owner_sub": {"S": owner_sub},
+        "snapshot_id": {"S": snapshot.snapshot_id},
+        "shipment_id": {"S": snapshot.shipment_id},
+        "snapshot_key": {"S": snapshot_ref.key},
+        "snapshot_sha256": {"S": snapshot_ref.sha256},
+        "created_at": {"N": str(int(NOW.timestamp()))},
+        "status": {"S": RunStatus.running.value},
+        "stage": {"S": PublicStage.detecting.value},
+        "stage_events": {"L": []},
+        "attempt_id": {"S": attempt_id},
+        "lease_expires_at": {"N": str(int(NOW.timestamp()) + 60)},
+        "scenario_id": {"S": "normal_control"},
+        "seed": {"N": "17"},
+        "base_timestamp": {"S": NOW.isoformat()},
+        "is_public_demo": {"BOOL": False},
+    }
+
+
+def _bound_report(
+    report: Report,
+    run_id: str,
+    snapshot: Snapshot,
+    snapshot_ref: ArtifactRef,
+    *,
+    report_id: str | None = None,
+) -> Report:
+    payload = report.model_dump(mode="python")
+    payload.update(
+        {
+            "report_id": report_id or report.report_id,
+            "run_id": run_id,
+            "snapshot_id": snapshot.snapshot_id,
+            "snapshot_sha256": snapshot_ref.sha256,
+        }
+    )
+    for evidence in payload["evidence"]:
+        evidence["snapshot_id"] = snapshot.snapshot_id
+    return Report.model_validate(payload)
+
+
+class ActiveLeaseDynamo(RecordingDynamo):
+    """Small stateful fake for active-lease release and immediate reuse."""
+
+    def __init__(self, active_run_id: str) -> None:
+        super().__init__()
+        self.active_run_id: str | None = active_run_id
+
+    def transact_write_items(self, **kwargs):
+        self.calls.append(("transact_write_items", kwargs))
+        items = kwargs["TransactItems"]
+        if len(items) == 4:
+            if self.active_run_id is not None:
+                reasons = [
+                    {"Code": "None"},
+                    {"Code": "None"},
+                    {"Code": "ConditionalCheckFailed"},
+                    {"Code": "None"},
+                ]
+                raise FakeAwsError("TransactionCanceledException", reasons)
+            self.active_run_id = items[2]["Put"]["Item"]["run_id"]["S"]
+        return {}
+
+    def delete_item(self, **kwargs):
+        self.calls.append(("delete_item", kwargs))
+        expected = kwargs["ExpressionAttributeValues"][":run_id"]["S"]
+        if self.active_run_id != expected:
+            raise FakeAwsError("ConditionalCheckFailedException")
+        self.active_run_id = None
+        return {}
 
 
 def test_create_transaction_persists_preparation_identity_and_all_limits() -> None:
@@ -165,6 +256,110 @@ def test_report_signer_uses_exact_key_and_bounded_expiry(report) -> None:
                 sha256=reference.sha256,
             )
         )
+
+
+def test_completion_rejects_another_runs_report(
+    snapshot: Snapshot, report: Report
+) -> None:
+    dynamo = RecordingDynamo()
+    s3 = FakeS3()
+    storage = _storage(dynamo=dynamo, s3=s3)
+    snapshot_a_ref = storage.put_snapshot(snapshot)
+    run_a_id = stable_uuid("aws-run-a")
+    dynamo.queue_response(
+        "get_item",
+        {"Item": _run_item(run_a_id, snapshot, snapshot_a_ref)},
+    )
+
+    snapshot_b = Snapshot.model_validate(
+        generate_snapshot(
+            "normal_control",
+            18,
+            NOW,
+            snapshot_id=stable_uuid("aws-snapshot-b"),
+            shipment_id=stable_uuid("aws-shipment-b"),
+        )
+    )
+    snapshot_b_ref = storage.put_snapshot(snapshot_b)
+    report_b = _bound_report(
+        report,
+        stable_uuid("aws-run-b"),
+        snapshot_b,
+        snapshot_b_ref,
+        report_id=stable_uuid("aws-report-b"),
+    )
+    report_b_ref = storage.put_report(report_b)
+
+    with pytest.raises(
+        ConditionalCheckFailedError,
+        match="run_id, snapshot_id, snapshot_sha256",
+    ):
+        storage.complete_run(
+            run_a_id,
+            "attempt",
+            RunStatus.completed,
+            report_b_ref,
+            "wrong report",
+        )
+    assert [method for method, _ in dynamo.calls] == ["get_item"]
+
+
+def test_completion_releases_matching_lease_and_allows_immediate_next_run(
+    snapshot: Snapshot, report: Report
+) -> None:
+    run_id = stable_uuid("aws-completed-run")
+    dynamo = ActiveLeaseDynamo(run_id)
+    s3 = FakeS3()
+    storage = _storage(dynamo=dynamo, s3=s3)
+    snapshot_ref = storage.put_snapshot(snapshot)
+    bound_report = _bound_report(report, run_id, snapshot, snapshot_ref)
+    report_ref = storage.put_report(bound_report)
+    dynamo.queue_response(
+        "get_item",
+        {"Item": _run_item(run_id, snapshot, snapshot_ref)},
+    )
+
+    storage.complete_run(
+        run_id,
+        "attempt",
+        RunStatus.completed,
+        report_ref,
+        "done",
+    )
+    assert dynamo.active_run_id is None
+    delete_call = next(call for method, call in dynamo.calls if method == "delete_item")
+    assert delete_call["ConditionExpression"] == "run_id = :run_id"
+
+    next_run = storage.create_or_get_run(
+        "operator", "next-request", "next-hash", run_metadata()
+    )
+    assert dynamo.active_run_id == next_run.run_id
+    assert next_run.run_id != run_id
+
+
+def test_completion_does_not_delete_a_newer_runs_active_lease(
+    snapshot: Snapshot, report: Report
+) -> None:
+    completed_run_id = stable_uuid("aws-old-run")
+    newer_run_id = stable_uuid("aws-new-run")
+    dynamo = ActiveLeaseDynamo(newer_run_id)
+    storage = _storage(dynamo=dynamo, s3=FakeS3())
+    snapshot_ref = storage.put_snapshot(snapshot)
+    bound_report = _bound_report(report, completed_run_id, snapshot, snapshot_ref)
+    report_ref = storage.put_report(bound_report)
+    dynamo.queue_response(
+        "get_item",
+        {"Item": _run_item(completed_run_id, snapshot, snapshot_ref)},
+    )
+
+    storage.complete_run(
+        completed_run_id,
+        "attempt",
+        RunStatus.completed,
+        report_ref,
+        "done",
+    )
+    assert dynamo.active_run_id == newer_run_id
 
 
 def test_queue_claim_stage_and_review_conditions_are_recorded() -> None:

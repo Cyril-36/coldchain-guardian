@@ -6,7 +6,7 @@ from datetime import timedelta
 import pytest
 
 from coldchain.contracts.enums import PublicStage, ReviewDecision, RunStatus, StageEventStatus
-from coldchain.contracts.schemas import ArtifactRef, Report, StageEvent
+from coldchain.contracts.schemas import ArtifactRef, Report, Snapshot, StageEvent
 from coldchain.simulator import generate_snapshot
 from coldchain.storage import (
     ActiveRunLimitExceededError,
@@ -24,6 +24,28 @@ def _create(storage: MemoryStorage, **metadata: object):
     return storage.create_or_get_run(
         "operator-a", "request-key", "body-hash", run_metadata(**metadata)
     )
+
+
+def _bound_report(
+    report: Report,
+    *,
+    run_id: str,
+    snapshot: Snapshot,
+    snapshot_ref: ArtifactRef,
+    report_id: str | None = None,
+) -> Report:
+    payload = report.model_dump(mode="python")
+    payload.update(
+        {
+            "report_id": report_id or report.report_id,
+            "run_id": run_id,
+            "snapshot_id": snapshot.snapshot_id,
+            "snapshot_sha256": snapshot_ref.sha256,
+        }
+    )
+    for evidence in payload["evidence"]:
+        evidence["snapshot_id"] = snapshot.snapshot_id
+    return Report.model_validate(payload)
 
 
 def test_run_reservation_persists_retry_identity_atomically(memory: MemoryStorage) -> None:
@@ -124,19 +146,32 @@ def test_snapshot_and_report_are_immutable_and_digest_checked(
 
 
 def test_completion_review_public_summary_and_signer(
-    memory: MemoryStorage, report: Report
+    memory: MemoryStorage, snapshot: Snapshot, report: Report
 ) -> None:
-    run = _create(memory, run_id=report.run_id, snapshot_id=report.snapshot_id)
+    run = _create(
+        memory,
+        run_id=report.run_id,
+        snapshot_id=snapshot.snapshot_id,
+        shipment_id=snapshot.shipment_id,
+    )
+    snapshot_ref = memory.put_snapshot(snapshot)
+    memory.attach_snapshot(run.run_id, snapshot_ref)
     memory.claim_run(run.run_id, "attempt", NOW, 60)
-    report_ref = memory.put_report(report)
+    bound_report = _bound_report(
+        report,
+        run_id=run.run_id,
+        snapshot=snapshot,
+        snapshot_ref=snapshot_ref,
+    )
+    report_ref = memory.put_report(bound_report)
     memory.complete_run(run.run_id, "attempt", RunStatus.completed, report_ref, "done")
     completed = memory.get_run(run.run_id)
-    assert completed.report_id == report.report_id
-    assert completed.report_summary.outcome == report.outcome
+    assert completed.report_id == bound_report.report_id
+    assert completed.report_summary.outcome == bound_report.outcome
     review = memory.save_review(
         run.run_id,
         "actor",
-        report.report_id,
+        bound_report.report_id,
         ReviewDecision.acknowledged,
         "checked",
     )
@@ -154,6 +189,72 @@ def test_completion_review_public_summary_and_signer(
     )
     assert memory.list_public_runs()[0].run_id == run.run_id
     assert memory.create_report_download_url(report_ref, 60).endswith("expires_in=60")
+
+    next_run = memory.create_or_get_run(
+        "operator-a", "next-request", "next-hash", run_metadata()
+    )
+    assert next_run.run_id != run.run_id
+
+
+def test_completion_rejects_another_runs_report(
+    memory: MemoryStorage, snapshot: Snapshot, report: Report
+) -> None:
+    run_a = memory.create_or_get_run(
+        "operator-a",
+        "run-a",
+        "hash-a",
+        run_metadata(
+            run_id=stable_uuid("run-a"),
+            snapshot_id=snapshot.snapshot_id,
+            shipment_id=snapshot.shipment_id,
+        ),
+    )
+    snapshot_a_ref = memory.put_snapshot(snapshot)
+    memory.attach_snapshot(run_a.run_id, snapshot_a_ref)
+    memory.claim_run(run_a.run_id, "attempt-a", NOW, 60)
+
+    snapshot_b = Snapshot.model_validate(
+        generate_snapshot(
+            "normal_control",
+            18,
+            BASE_TIME,
+            snapshot_id=stable_uuid("snapshot-b"),
+            shipment_id=stable_uuid("shipment-b"),
+        )
+    )
+    run_b = memory.create_or_get_run(
+        "operator-b",
+        "run-b",
+        "hash-b",
+        run_metadata(
+            run_id=stable_uuid("run-b"),
+            snapshot_id=snapshot_b.snapshot_id,
+            shipment_id=snapshot_b.shipment_id,
+        ),
+    )
+    snapshot_b_ref = memory.put_snapshot(snapshot_b)
+    memory.attach_snapshot(run_b.run_id, snapshot_b_ref)
+    report_b = _bound_report(
+        report,
+        run_id=run_b.run_id,
+        snapshot=snapshot_b,
+        snapshot_ref=snapshot_b_ref,
+        report_id=stable_uuid("report-b"),
+    )
+    report_b_ref = memory.put_report(report_b)
+
+    with pytest.raises(
+        ConditionalCheckFailedError,
+        match="run_id, snapshot_id, snapshot_sha256",
+    ):
+        memory.complete_run(
+            run_a.run_id,
+            "attempt-a",
+            RunStatus.completed,
+            report_b_ref,
+            "wrong report",
+        )
+    assert memory.get_run(run_a.run_id).status == RunStatus.running
 
 
 def test_failed_completion_does_not_require_report(memory: MemoryStorage) -> None:

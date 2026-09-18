@@ -31,7 +31,12 @@ from .exceptions import (
     NotFoundError,
     StateConflictError,
 )
-from .serialization import canonical_json_bytes, deserialize_verified, sha256_hex
+from .serialization import (
+    canonical_json_bytes,
+    deserialize_verified,
+    sha256_hex,
+    validate_report_binding,
+)
 
 _ID_NAMESPACE = UUID("42568e65-3890-4d6f-b710-ad9318d4ce8a")
 _TERMINAL = {RunStatus.completed, RunStatus.needs_review, RunStatus.failed}
@@ -231,6 +236,7 @@ class MemoryStorage:
             report: Report | None = None
             if report_ref is not None:
                 report = self.get_report(report_ref)
+                validate_report_binding(run, report)
             elif status != RunStatus.failed:
                 raise ConditionalCheckFailedError("successful completion requires a report")
             run.status = status
