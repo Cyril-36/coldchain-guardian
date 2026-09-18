@@ -62,6 +62,11 @@ def investigate(
     """A normal run skips the model; every other model failure degrades visibly."""
     detection = build_detection_result(snapshot)
     ctx = ToolContext(snapshot, detection.measurements, run_id=run_id)
+    # The digest identifies the snapshot artifact as stored, so that a reader can
+    # verify the report against the file they can fetch. Detection normalizes by
+    # sorting and deduplicating, which changes the digest; that is an internal step
+    # and must not alter the report's provenance.
+    snapshot_digest = snapshot_sha256(snapshot)
     get_excursion_summary(ctx)
     limitations = [
         "Synthetic air-sensor telemetry; this report does not decide product safety or release."
@@ -75,7 +80,12 @@ def investigate(
 
     if not detection.has_excursion and not detection.needs_review:
         return _report(
-            ctx, run_id, Outcome.no_excursion, limitations, VerificationStatus.passed
+            ctx,
+            run_id,
+            Outcome.no_excursion,
+            limitations,
+            VerificationStatus.passed,
+            snapshot_digest=snapshot_digest,
         )
     if detection.reason:
         return _report(
@@ -85,6 +95,7 @@ def investigate(
             limitations + [f"Investigation requires review: {detection.reason}."],
             VerificationStatus.blocked,
             error=detection.reason,
+            snapshot_digest=snapshot_digest,
         )
 
     # Populate a complete, snapshot-bound registry for verification. These calls
@@ -108,6 +119,7 @@ def investigate(
             ],
             VerificationStatus.blocked,
             error="model_unavailable",
+            snapshot_digest=snapshot_digest,
         )
 
     try:
@@ -122,6 +134,7 @@ def investigate(
             limitations + ["AI investigation failed; deterministic measurements remain visible."],
             VerificationStatus.blocked,
             error="model_failed",
+            snapshot_digest=snapshot_digest,
         )
     errors = verify_proposal(proposal, ctx)
     if errors:
@@ -132,6 +145,7 @@ def investigate(
             limitations + ["Proposed evidence did not pass deterministic verification."],
             VerificationStatus.blocked,
             error="proposal_rejected: " + "; ".join(errors),
+            snapshot_digest=snapshot_digest,
         )
 
     hypotheses = [
@@ -164,6 +178,7 @@ def investigate(
         hypotheses=hypotheses,
         primary_hypothesis=proposal.primary_hypothesis,
         model_id=model_id,
+        snapshot_digest=snapshot_digest,
     )
 
 
@@ -178,6 +193,7 @@ def _report(
     hypotheses: list[Hypothesis] | None = None,
     primary_hypothesis=None,
     model_id: str | None = None,
+    snapshot_digest: str,
 ) -> Report:
     measurement_ids = [eid for m in ctx.measurements for eid in m.evidence_ids]
     if outcome == Outcome.no_excursion:
@@ -198,7 +214,7 @@ def _report(
         report_id=str(uuid4()),
         run_id=run_id,
         snapshot_id=ctx.snapshot_id,
-        snapshot_sha256=snapshot_sha256(ctx.snapshot),
+        snapshot_sha256=snapshot_digest,
         detector_version=DETECTOR_VERSION,
         prompt_version=PROMPT_VERSION,
         model_id=model_id,

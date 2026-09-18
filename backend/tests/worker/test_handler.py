@@ -7,6 +7,8 @@ import pytest
 
 from coldchain.contracts import QueueMessage, Snapshot
 from coldchain.contracts.enums import RunStatus
+from coldchain.contracts.schemas import snapshot_sha256
+from coldchain.core.detector import validate_snapshot
 from coldchain.simulator import generate_snapshot
 from coldchain.storage import MemoryStorage, TemporaryStorageError
 from coldchain.worker.handler import process_message
@@ -102,3 +104,44 @@ def test_report_write_failure_never_marks_run_complete() -> None:
     run = storage.get_run(message.run_id)
     assert run is not None and run.status == RunStatus.running
     assert run.report_ref is None
+
+
+def test_out_of_order_snapshot_completes_and_keeps_the_stored_digest() -> None:
+    """Normalization must not change the digest that ties a report to its snapshot.
+
+    docs/CONTRACTS.md requires out-of-order data to be handled deterministically, and
+    the detector normalizes by sorting and deduplicating. If the report carries the
+    digest of the *normalized* snapshot while the worker compares against the *stored*
+    one, any snapshot that normalization touches fails the comparison, and because the
+    failure is permanent the run retries all the way to the dead-letter queue.
+
+    scripts/validate_examples.py pins the intent: a report's digest must match the
+    stored snapshot artifact.
+    """
+    storage = MemoryStorage()
+    run = storage.create_or_get_run(
+        "operator-a",
+        str(uuid4()),
+        str(uuid4()),
+        {"scenario_id": "door_exposure", "seed": 17, "base_timestamp": NOW},
+    )
+    snapshot = Snapshot.model_validate(
+        generate_snapshot(
+            "door_exposure", 17, NOW, snapshot_id=run.snapshot_id, shipment_id=run.shipment_id
+        )
+    )
+    shuffled = snapshot.model_copy(update={"readings": list(reversed(snapshot.readings))})
+    # Precondition: normalization really does change this snapshot's digest.
+    assert snapshot_sha256(shuffled) != snapshot_sha256(validate_snapshot(shuffled))
+
+    stored_ref = storage.put_snapshot(shuffled)
+    storage.attach_snapshot(run.run_id, stored_ref)
+    storage.mark_queued(run.run_id)
+
+    message = QueueMessage(run_id=run.run_id, snapshot_id=run.snapshot_id)
+    assert process_message(message, storage) == "completed"
+
+    finished = storage.get_run(run.run_id)
+    assert finished.status in {RunStatus.completed, RunStatus.needs_review}
+    report = storage.get_report(finished.report_ref)
+    assert report.snapshot_sha256 == stored_ref.sha256
