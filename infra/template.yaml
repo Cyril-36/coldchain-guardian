@@ -19,9 +19,19 @@ Parameters:
     Type: String
     Default: amazon.nova-lite-v1:0
     Description: Foundation model ID validated in this account and region
+  EnableBedrock:
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: Set true only after a successful model smoke test
   BuildSha:
     Type: String
     Default: local
+
+Conditions:
+  BedrockEnabled: !Equals [!Ref EnableBedrock, 'true']
 
 Resources:
   RunTable:
@@ -247,7 +257,7 @@ Resources:
         Variables:
           ARTIFACT_BUCKET: !Ref ArtifactBucket
           RUNS_TABLE: !Ref RunTable
-          BEDROCK_MODEL_ID: !Ref BedrockModelId
+          BEDROCK_MODEL_ID: !If [BedrockEnabled, !Ref BedrockModelId, '']
       Policies:
         - Version: '2012-10-17'
           Statement:
