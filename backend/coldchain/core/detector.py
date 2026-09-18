@@ -43,6 +43,73 @@ def _out_of_range(temp: float, min_c: float, max_c: float) -> bool:
     return temp < min_c or temp > max_c
 
 
+def _segment_excursion_intervals(
+    t1: float,
+    v1: float,
+    t2: float,
+    v2: float,
+    min_c: float,
+    max_c: float,
+) -> list[tuple[float, float]]:
+    """Return out-of-range [start, end] time intervals within [t1, t2].
+
+    Assumes linear interpolation between (t1, v1) and (t2, v2).
+    A point is out of range if temp < min_c or temp > max_c.
+    """
+    dt = t2 - t1
+    if dt <= 0:
+        return []
+
+    # Flat line
+    if v1 == v2:
+        if v1 < min_c or v1 > max_c:
+            return [(t1, t2)]
+        return []
+
+    out1_hi = v1 > max_c
+    out2_hi = v2 > max_c
+    out1_lo = v1 < min_c
+    out2_lo = v2 < min_c
+
+    # Straddle Case: high to low (v1 > max_c and v2 < min_c)
+    if out1_hi and out2_lo:
+        # Crosses max_c first, then min_c
+        t_hi = t1 + dt * (v1 - max_c) / (v1 - v2)
+        t_lo = t1 + dt * (v1 - min_c) / (v1 - v2)
+        return [(t1, t_hi), (t_lo, t2)]
+
+    # Straddle Case: low to high (v1 < min_c and v2 > max_c)
+    if out1_lo and out2_hi:
+        # Crosses min_c first, then max_c
+        t_lo = t1 + dt * (min_c - v1) / (v2 - v1)
+        t_hi = t1 + dt * (max_c - v1) / (v2 - v1)
+        return [(t1, t_lo), (t_hi, t2)]
+
+    intervals: list[tuple[float, float]] = []
+
+    # High excursion
+    if out1_hi and out2_hi:
+        intervals.append((t1, t2))
+    elif out1_hi and not out2_hi:
+        t_cross = t1 + dt * (v1 - max_c) / (v1 - v2)
+        intervals.append((t1, t_cross))
+    elif not out1_hi and out2_hi:
+        t_cross = t1 + dt * (max_c - v1) / (v2 - v1)
+        intervals.append((t_cross, t2))
+
+    # Low excursion
+    if out1_lo and out2_lo:
+        intervals.append((t1, t2))
+    elif out1_lo and not out2_lo:
+        t_cross = t1 + dt * (min_c - v1) / (v2 - v1)
+        intervals.append((t1, t_cross))
+    elif not out1_lo and out2_lo:
+        t_cross = t1 + dt * (v1 - min_c) / (v1 - v2)
+        intervals.append((t_cross, t2))
+
+    return intervals
+
+
 def _interval_out_seconds(
     t1: float,
     v1: float,
@@ -51,46 +118,9 @@ def _interval_out_seconds(
     min_c: float,
     max_c: float,
 ) -> float:
-    """Return the seconds within [t1, t2] where interpolated temp is outside [min_c, max_c].
-
-    Handles high excursions (above max_c) and low excursions (below min_c)
-    independently and sums them.  Both thresholds can contribute in one
-    interval if v1 and v2 straddle the entire range, though that is unusual.
-    """
-    dt = t2 - t1
-    if dt <= 0:
-        return 0.0
-
-    out1_hi = v1 > max_c
-    out2_hi = v2 > max_c
-    out1_lo = v1 < min_c
-    out2_lo = v2 < min_c
-
-    out_seconds = 0.0
-
-    # ── High excursion (above max_c) ────────────────────────────────────
-    if out1_hi and out2_hi:
-        out_seconds += dt
-    elif out1_hi and not out2_hi:
-        # crossing back in: fraction of interval above max_c
-        frac = (v1 - max_c) / (v1 - v2)  # v1 > max_c >= v2
-        out_seconds += dt * frac
-    elif not out1_hi and out2_hi:
-        # crossing out: fraction of interval above max_c
-        frac = (v2 - max_c) / (v2 - v1)  # v2 > max_c >= v1
-        out_seconds += dt * frac
-
-    # ── Low excursion (below min_c) ─────────────────────────────────────
-    if out1_lo and out2_lo:
-        out_seconds += dt
-    elif out1_lo and not out2_lo:
-        frac = (min_c - v1) / (v2 - v1)  # v1 < min_c <= v2
-        out_seconds += dt * frac
-    elif not out1_lo and out2_lo:
-        frac = (min_c - v2) / (v1 - v2)  # v2 < min_c <= v1
-        out_seconds += dt * frac
-
-    return out_seconds
+    """Return the seconds within [t1, t2] where interpolated temp is outside [min_c, max_c]."""
+    intervals = _segment_excursion_intervals(t1, v1, t2, v2, min_c, max_c)
+    return sum(end - start for start, end in intervals)
 
 
 def is_excursion_detected(m: SensorMeasurement) -> bool:
@@ -275,9 +305,71 @@ def detect_excursions(
     return measurements
 
 
+def _get_sensor_excursion_windows(
+    readings: list[Reading],
+    policy: Policy,
+) -> list[tuple[float, float]]:
+    """Compute disjoint excursion windows for a sensor.
+
+    Returns a list of merged [start_time, end_time] windows.
+    Adjacent intervals touching across readings (curr_start <= prev_end)
+    are merged into a single window.
+    """
+    if not readings:
+        return []
+
+    if len(readings) == 1:
+        r = readings[0]
+        if _out_of_range(r.temperature_c, policy.min_c, policy.max_c):
+            t = _ts(r.observed_at)
+            return [(t, t)]
+        return []
+
+    raw_intervals: list[tuple[float, float]] = []
+
+    for i in range(len(readings) - 1):
+        r1, r2 = readings[i], readings[i + 1]
+        t1, t2 = _ts(r1.observed_at), _ts(r2.observed_at)
+        gap = t2 - t1
+
+        if gap > policy.max_gap_seconds:
+            # Data gap: do not interpolate across unobserved intervals.
+            # Record point excursions if endpoints are out of range.
+            if _out_of_range(r1.temperature_c, policy.min_c, policy.max_c):
+                raw_intervals.append((t1, t1))
+            if _out_of_range(r2.temperature_c, policy.min_c, policy.max_c):
+                raw_intervals.append((t2, t2))
+        else:
+            seg_intervals = _segment_excursion_intervals(
+                t1, r1.temperature_c, t2, r2.temperature_c, policy.min_c, policy.max_c
+            )
+            raw_intervals.extend(seg_intervals)
+
+    if not raw_intervals:
+        return []
+
+    # Sort and merge contiguous / overlapping intervals
+    sorted_intervals = sorted(raw_intervals, key=lambda iv: (iv[0], iv[1]))
+    merged: list[tuple[float, float]] = [sorted_intervals[0]]
+
+    for current in sorted_intervals[1:]:
+        prev_start, prev_end = merged[-1]
+        curr_start, curr_end = current
+
+        # If current interval touches or overlaps previous interval
+        # (tolerance of 1e-6s for floating point threshold crossing times)
+        if curr_start <= prev_end + 1e-6:
+            merged[-1] = (prev_start, max(prev_end, curr_end))
+        else:
+            merged.append(current)
+
+    return merged
+
+
 def build_measurement_evidence(
     snapshot: Snapshot,
     measurements: list[SensorMeasurement],
+    policy: Policy | None = None,
 ) -> list[EvidenceRef]:
     """Build canonical EvidenceRef items for detector measurements.
 
@@ -287,7 +379,10 @@ def build_measurement_evidence(
     - Attaches sensor reading event IDs as ``record_ids``
     - Sets the out-of-range interval when an excursion was observed
     - Sets ``method_version=DETECTOR_VERSION``
+
+    If *policy* is omitted, defaults to ``snapshot.policy``.
     """
+    eff_policy = policy if policy is not None else snapshot.policy
     sensor_map = {s.sensor_id: s for s in snapshot.sensors}
     readings_by_sensor: dict[str, list[Reading]] = {}
     for r in snapshot.readings:
@@ -316,12 +411,18 @@ def build_measurement_evidence(
         if is_excursion_detected(m):
             summary = (
                 f"Sensor {sid} ({placement}): excursion detected with estimated "
-                f"{m.estimated_out_of_range_seconds}s out of range [{snapshot.policy.min_c}, "
-                f"{snapshot.policy.max_c}] °C, observed range [{m.observed_min_c}, "
+                f"{m.estimated_out_of_range_seconds}s out of range [{eff_policy.min_c}, "
+                f"{eff_policy.max_c}] °C, observed range [{m.observed_min_c}, "
                 f"{m.observed_max_c}] °C across {m.sample_count} samples."
             )
         elif m.sample_count == 0:
             summary = f"Sensor {sid} ({placement}): no readings observed."
+        elif m.coverage_status != CoverageStatus.complete:
+            summary = (
+                f"Sensor {sid} ({placement}): observed readings were in range "
+                f"[{m.observed_min_c}, {m.observed_max_c}] °C "
+                f"across {m.sample_count} samples."
+            )
         else:
             summary = (
                 f"Sensor {sid} ({placement}): maintained normal temperature "
@@ -350,30 +451,30 @@ def detect_excursions_with_evidence(
 ) -> tuple[list[SensorMeasurement], list[EvidenceRef]]:
     """Compute per-sensor measurements and matching EvidenceRef items."""
     measurements = detect_excursions(snapshot, policy)
-    evidence = build_measurement_evidence(snapshot, measurements)
+    evidence = build_measurement_evidence(snapshot, measurements, policy=policy)
     return measurements, evidence
 
 
 def check_multiple_windows(
     measurements: list[SensorMeasurement],
     snapshot: Snapshot | None = None,
+    policy: Policy | None = None,
 ) -> bool:
     """Return True if there are multiple disjoint excursion windows.
 
     Not supported in MVP — presence triggers needs_review with
     multiple_windows_unsupported.
 
-    Conditions indicating multiple windows:
-    1. A sensor readings exhibit two or more disjoint out-of-range windows
-       separated by in-range readings.
-    2. A gap > max_gap_seconds occurs during an excursion (i.e. at least one
-       of the gap's bordering readings is out of range, or occurs while
-       an excursion is in progress).
+    Excursion windows are determined from the continuous interpolated temperature
+    path for each sensor:
+    1. A temperature path crossing into and out of bounds multiple times
+       (including straddling high-to-low or low-to-high excursions).
+    2. Telemetry gaps separating distinct out-of-range observations.
     """
     if snapshot is None:
         return False
 
-    policy = snapshot.policy
+    eff_policy = policy if policy is not None else snapshot.policy
     readings_by_sensor: dict[str, list[Reading]] = {}
     for r in snapshot.readings:
         readings_by_sensor.setdefault(r.sensor_id, []).append(r)
@@ -383,33 +484,8 @@ def check_multiple_windows(
             readings_by_sensor.get(sensor.sensor_id, []),
             key=_reading_sort_key,
         )
-        if not readings:
-            continue
-
-        in_excursion = False
-        window_count = 0
-        for i, r in enumerate(readings):
-            out = _out_of_range(r.temperature_c, policy.min_c, policy.max_c)
-            if out and not in_excursion:
-                window_count += 1
-                in_excursion = True
-            elif not out and in_excursion:
-                in_excursion = False
-
-            # Check gap to next reading
-            if i < len(readings) - 1:
-                next_r = readings[i + 1]
-                gap = _ts(next_r.observed_at) - _ts(r.observed_at)
-                if gap > policy.max_gap_seconds:
-                    next_out = _out_of_range(
-                        next_r.temperature_c, policy.min_c, policy.max_c
-                    )
-                    # Gap touches an excursion if either endpoint is out of range
-                    # or if the gap interrupted an active excursion.
-                    if out or next_out or in_excursion:
-                        return True
-
-        if window_count > 1:
+        windows = _get_sensor_excursion_windows(readings, eff_policy)
+        if len(windows) > 1:
             return True
 
     return False
@@ -437,8 +513,8 @@ def build_detection_result(snapshot: Snapshot) -> DetectionResult:
     clean = validate_snapshot(snapshot)
     measurements = detect_excursions(clean, clean.policy)
     has_excursion = any(is_excursion_detected(m) for m in measurements)
-    multi = check_multiple_windows(measurements, clean)
-    evidence = build_measurement_evidence(clean, measurements)
+    multi = check_multiple_windows(measurements, clean, clean.policy)
+    evidence = build_measurement_evidence(clean, measurements, policy=clean.policy)
 
     if multi:
         return DetectionResult(

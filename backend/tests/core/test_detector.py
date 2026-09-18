@@ -760,3 +760,201 @@ def test_simulator_scenarios_integration(
     assert result.needs_review is expected_needs_review
     assert result.reason is None  # Normal scenarios are single continuous windows
     assert len(result.measurements) == 2
+
+
+# ── Focused Regression Tests (Multiple Windows, Gaps, Evidence & Policy Bounds) ──
+
+
+def test_straddle_high_to_low_creates_two_windows_and_24s_duration():
+    """Requirement 1: With bounds 2-8°C, readings 10°C at 0s and 0°C at 60s create two
+
+    separate out-of-range windows totaling 24 seconds, returning multiple_windows_unsupported.
+    """
+    readings = [
+        _reading("r-0", "s-ref", 0, 10.0),
+        _reading("r-1", "s-ref", 60, 0.0),
+    ]
+    snap = make_snapshot(readings, cutoff_seconds=120)
+    res = build_detection_result(snap)
+
+    assert len(res.measurements) == 1
+    m = res.measurements[0]
+    assert m.sample_count == 2
+    # 10°C down to 8°C takes 12s; 2°C down to 0°C takes 12s; total = 24.0s
+    assert m.estimated_out_of_range_seconds == 24.0
+    assert m.censored_start is True
+    assert m.censored_end is True
+    assert is_excursion_detected(m) is True
+
+    assert res.has_excursion is True
+    assert res.needs_review is True
+    assert res.reason == "multiple_windows_unsupported"
+    assert check_multiple_windows(res.measurements, snap) is True
+
+
+def test_straddle_low_to_high_creates_two_windows_and_24s_duration():
+    """Symmetric test: 0°C at 0s and 10°C at 60s against 2-8°C bounds."""
+    readings = [
+        _reading("r-0", "s-ref", 0, 0.0),
+        _reading("r-1", "s-ref", 60, 10.0),
+    ]
+    snap = make_snapshot(readings, cutoff_seconds=120)
+    res = build_detection_result(snap)
+
+    m = res.measurements[0]
+    assert m.estimated_out_of_range_seconds == 24.0
+    assert res.has_excursion is True
+    assert res.needs_review is True
+    assert res.reason == "multiple_windows_unsupported"
+    assert check_multiple_windows(res.measurements, snap) is True
+
+
+def test_normal_reading_followed_by_gap_and_excursion():
+    """Requirement 2: A 5°C reading followed 300s later by a 10°C reading has an unknown gap
+
+    and one observed out-of-range sample. Keep needs_review=True, coverage_status=partial,
+    unknown_duration_seconds=300; do not claim two windows.
+    """
+    readings = [
+        _reading("r-0", "s-ref", 0, 5.0),
+        _reading("r-1", "s-ref", 300, 10.0),
+    ]
+    snap = make_snapshot(readings, cutoff_seconds=360)
+    res = build_detection_result(snap)
+
+    assert len(res.measurements) == 1
+    m = res.measurements[0]
+    assert m.sample_count == 2
+    assert m.coverage_status == CoverageStatus.partial
+    assert m.unknown_duration_seconds == 300.0
+    assert m.first_observed_out_at is not None
+    assert is_excursion_detected(m) is True
+
+    # One observed excursion window, so multiple_windows_unsupported must NOT be claimed
+    assert check_multiple_windows(res.measurements, snap) is False
+    assert res.has_excursion is True
+    assert res.needs_review is True
+    assert res.reason is None
+
+
+def test_evidence_wording_honest_for_partial_and_insufficient_coverage():
+    """Requirement 3: Measurement evidence wording must say observed readings were in range,
+
+    not that the sensor 'maintained normal temperature' through unobserved time.
+    """
+    # 1. Complete coverage: maintained normal temperature range
+    complete_readings = [
+        _reading("r-0", "s-ref", 0, 5.0),
+        _reading("r-1", "s-ref", 60, 5.5),
+        _reading("r-2", "s-ref", 120, 5.0),
+    ]
+    complete_snap = make_snapshot(complete_readings, cutoff_seconds=180)
+    complete_res = build_detection_result(complete_snap)
+    assert complete_res.measurements[0].coverage_status == CoverageStatus.complete
+    ev_complete = complete_res.evidence[0]
+    assert (
+        "maintained normal temperature range [5.0, 5.5] °C across 3 samples"
+        in ev_complete.summary
+    )
+
+    # 2. Partial coverage (normal readings separated by gap): observed readings were in range
+    partial_readings = [
+        _reading("r-0", "s-ref", 0, 5.0),
+        _reading("r-1", "s-ref", 300, 5.5),  # 300s gap
+    ]
+    partial_snap = make_snapshot(partial_readings, cutoff_seconds=360)
+    partial_res = build_detection_result(partial_snap)
+    assert partial_res.measurements[0].coverage_status == CoverageStatus.partial
+    ev_partial = partial_res.evidence[0]
+    assert (
+        "observed readings were in range [5.0, 5.5] °C across 2 samples"
+        in ev_partial.summary
+    )
+    assert "maintained normal temperature" not in ev_partial.summary
+
+    # 3. Insufficient coverage (single reading): observed readings were in range
+    insufficient_readings = [
+        _reading("r-0", "s-ref", 0, 5.0),
+    ]
+    insufficient_snap = make_snapshot(insufficient_readings, cutoff_seconds=60)
+    insufficient_res = build_detection_result(insufficient_snap)
+    assert insufficient_res.measurements[0].coverage_status == CoverageStatus.insufficient
+    ev_insufficient = insufficient_res.evidence[0]
+    assert (
+        "observed readings were in range [5.0, 5.0] °C across 1 samples"
+        in ev_insufficient.summary
+    )
+    assert "maintained normal temperature" not in ev_insufficient.summary
+
+
+def test_evidence_for_sensor_with_zero_readings():
+    """Requirement 5: Evidence for a sensor with zero readings produces an honest summary,
+
+    associates deterministic evidence_ids, has empty record_ids and None interval.
+    """
+    sensors = [
+        Sensor(sensor_id=_uid("s-ref"), placement="front_air", role=SensorRole.reference),
+        Sensor(sensor_id=_uid("s-cmp"), placement="rear_air", role=SensorRole.comparison),
+    ]
+    readings = [
+        _reading("r-0", "s-ref", 0, 5.0),
+        _reading("r-1", "s-ref", 60, 5.0),
+    ]
+    snap = make_snapshot(readings, sensors=sensors)
+    res = build_detection_result(snap)
+
+    cmp_m = next(m for m in res.measurements if m.sensor_id == _uid("s-cmp"))
+    assert cmp_m.sample_count == 0
+    assert cmp_m.coverage_status == CoverageStatus.insufficient
+    assert len(cmp_m.evidence_ids) == 1
+
+    cmp_ev = next(e for e in res.evidence if e.evidence_id == cmp_m.evidence_ids[0])
+    assert cmp_ev.snapshot_id == snap.snapshot_id
+    assert cmp_ev.kind == EvidenceKind.derived_metric
+    assert cmp_ev.method_version == DETECTOR_VERSION
+    assert cmp_ev.record_ids == []
+    assert cmp_ev.interval is None
+    assert cmp_ev.summary == f"Sensor {_uid('s-cmp')} (rear_air): no readings observed."
+    assert "maintained normal temperature" not in cmp_ev.summary
+
+
+def test_detect_excursions_with_evidence_custom_policy_bounds():
+    """Requirement 4: detect_excursions_with_evidence uses the provided policy for both
+
+    calculations and evidence summary, not falling back to snapshot.policy.
+    """
+    # Snapshot policy has [2.0, 8.0]
+    readings = [
+        _reading("r-0", "s-ref", 0, 5.0),
+        _reading("r-1", "s-ref", 60, 7.0),
+        _reading("r-2", "s-ref", 120, 5.0),
+    ]
+    snap = make_snapshot(readings, cutoff_seconds=180)
+    assert snap.policy.min_c == 2.0
+    assert snap.policy.max_c == 8.0
+
+    # Under snapshot policy [2.0, 8.0], 7.0°C is within bounds (no excursion)
+    default_m, default_ev = detect_excursions_with_evidence(snap, snap.policy)
+    assert default_m[0].estimated_out_of_range_seconds == 0.0
+    assert "maintained normal temperature" in default_ev[0].summary
+
+    # Under custom stricter policy [3.0, 6.0], 7.0°C is an excursion!
+    custom_policy = Policy(
+        policy_id="pol-custom",
+        policy_version="1.0",
+        min_c=3.0,
+        max_c=6.0,
+        expected_interval_seconds=60.0,
+        max_gap_seconds=120.0,
+    )
+    custom_m, custom_ev = detect_excursions_with_evidence(snap, custom_policy)
+
+    # Calculation must reflect custom policy bounds
+    assert custom_m[0].estimated_out_of_range_seconds > 0.0
+    assert is_excursion_detected(custom_m[0]) is True
+
+    # Evidence summary must cite [3.0, 6.0] °C, NOT [2.0, 8.0] °C
+    summary = custom_ev[0].summary
+    assert "[3.0, 6.0] °C" in summary
+    assert "[2.0, 8.0] °C" not in summary
+    assert "excursion detected" in summary
