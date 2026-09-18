@@ -29,6 +29,7 @@ from coldchain.storage import (
     StorageError,
     StorageProtocol,
     TemporaryEnqueueError,
+    TemporaryStorageError,
 )
 
 SCENARIO_CATALOGUE: tuple[dict[str, str], ...] = (
@@ -109,15 +110,20 @@ class ApiService:
                     preparation = run.to_preparation_record()
                     if preparation is None:
                         raise TemporaryEnqueueError("run preparation metadata is unavailable")
-                    snapshot = Snapshot.model_validate(
-                        self._snapshot_generator(
-                            preparation.scenario_id,
-                            preparation.seed,
-                            preparation.base_timestamp,
-                            snapshot_id=preparation.snapshot_id,
-                            shipment_id=preparation.shipment_id,
+                    try:
+                        snapshot = Snapshot.model_validate(
+                            self._snapshot_generator(
+                                preparation.scenario_id,
+                                preparation.seed,
+                                preparation.base_timestamp,
+                                snapshot_id=preparation.snapshot_id,
+                                shipment_id=preparation.shipment_id,
+                            )
                         )
-                    )
+                    except Exception as error:
+                        raise TemporaryEnqueueError(
+                            "snapshot preparation failed; retry the same request"
+                        ) from error
                     snapshot_ref = self.storage.put_snapshot(snapshot)
                     self.storage.attach_snapshot(run.run_id, snapshot_ref)
 
@@ -132,15 +138,16 @@ class ApiService:
                         f"queue delivery failed; retry the same request for run {run.run_id}"
                     ) from error
                 self.storage.mark_queued(run.run_id)
+
+            current = self.storage.get_run(run.run_id)
+            if current is None:
+                raise TemporaryStorageError("reserved run disappeared")
         except StorageError as error:
             # The response body remains the frozen error contract; this header lets a
             # caller correlate and retry a run that was already durably reserved.
             error.run_id = run.run_id
             raise
 
-        current = self.storage.get_run(run.run_id)
-        if current is None:
-            raise NotFoundError("run does not exist")
         return RunResponse(
             run_id=current.run_id,
             status=current.status,

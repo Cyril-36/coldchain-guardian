@@ -257,7 +257,7 @@ Errors use one envelope and never contain stack traces, token data, raw AWS requ
 {
   "error": {
     "code": "report_not_ready",
-    "message": "report is not ready",
+    "message": "Report is not ready",
     "request_id": "api-gateway-request-id",
     "retryable": false
   }

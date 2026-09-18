@@ -33,8 +33,7 @@ def validate_report_binding(run: Run, report: Report) -> None:
         mismatches.append("snapshot_sha256")
     if mismatches:
         raise ConditionalCheckFailedError(
-            "report does not match the current run and attached snapshot: "
-            + ", ".join(mismatches)
+            "report does not match the current run and attached snapshot: " + ", ".join(mismatches)
         )
 
 
@@ -60,7 +59,13 @@ def deserialize_verified(  # noqa: UP047 - package remains Python 3.11 compatibl
 ) -> ArtifactModel:
     if sha256_hex(payload) != expected_sha256:
         raise StateConflictError("artifact digest does not match stored bytes")
-    decoded = json.loads(payload.decode("utf-8"))
+    try:
+        decoded = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise StateConflictError("artifact is not valid JSON") from error
     if not isinstance(decoded, dict):
-        raise ValueError("artifact root must be a JSON object")
-    return validator(decoded)
+        raise StateConflictError("artifact root must be a JSON object")
+    try:
+        return validator(decoded)
+    except (TypeError, ValueError) as error:
+        raise StateConflictError("artifact does not match its canonical schema") from error

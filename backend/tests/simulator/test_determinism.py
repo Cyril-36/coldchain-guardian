@@ -1,3 +1,4 @@
+import random
 from datetime import UTC, datetime
 
 from coldchain.simulator import SCENARIO_IDS, generate_snapshot
@@ -47,3 +48,9 @@ def test_different_seeds_produce_controlled_variation() -> None:
     second_temperatures = [reading["temperature_c"] for reading in second["readings"]]
     assert first_temperatures != second_temperatures
     assert all(2.0 <= value <= 11.0 for value in first_temperatures + second_temperatures)
+
+
+def test_generation_does_not_mutate_global_random_state() -> None:
+    before = random.getstate()
+    generate_snapshot("door_exposure", 123, BASE_TIMESTAMP)
+    assert random.getstate() == before

@@ -6,6 +6,7 @@ import base64
 import json
 import logging
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -75,7 +76,10 @@ class ApiApplication:
         self.allowed_operator_subs = allowed_operator_subs
 
     def handle(self, event: dict[str, Any]) -> dict[str, Any]:
-        request_id = str(event.get("requestContext", {}).get("requestId") or "unknown")
+        context = event.get("requestContext")
+        if not isinstance(context, Mapping):
+            context = {}
+        request_id = str(context.get("requestId") or "unknown")
         try:
             response = self._dispatch(event)
         except ApiRequestError as error:
@@ -163,10 +167,20 @@ class ApiApplication:
         return HttpResponse(status_code, body.model_dump(mode="json"))
 
     def _dispatch(self, event: dict[str, Any]) -> HttpResponse:
-        context = event.get("requestContext", {})
-        method = str(context.get("http", {}).get("method") or event.get("httpMethod") or "GET")
+        context = event.get("requestContext")
+        if not isinstance(context, Mapping):
+            context = {}
+        http_context = context.get("http")
+        if not isinstance(http_context, Mapping):
+            http_context = {}
+        method = str(http_context.get("method") or event.get("httpMethod") or "GET")
         path = str(event.get("rawPath") or event.get("path") or "/")
-        headers = {str(k).lower(): str(v) for k, v in (event.get("headers") or {}).items()}
+        raw_headers = event.get("headers")
+        if raw_headers is None:
+            raw_headers = {}
+        if not isinstance(raw_headers, Mapping):
+            raise ApiRequestError(422, "invalid_request", "Request headers are invalid")
+        headers = {str(k).lower(): str(v) for k, v in raw_headers.items()}
 
         if method == "GET" and path == "/v1/health":
             return HttpResponse(
@@ -236,17 +250,18 @@ class ApiApplication:
         raise ApiRequestError(404, "not_found", "Route not found")
 
     def _operator(self, event: dict[str, Any], *, require_write: bool) -> str:
-        claims = (
-            event.get("requestContext", {}).get("authorizer", {}).get("jwt", {}).get("claims", {})
-        )
-        subject = claims.get("sub") if isinstance(claims, dict) else None
+        context = event.get("requestContext")
+        authorizer = context.get("authorizer") if isinstance(context, Mapping) else None
+        jwt = authorizer.get("jwt") if isinstance(authorizer, Mapping) else None
+        claims = jwt.get("claims") if isinstance(jwt, Mapping) else None
+        subject = claims.get("sub") if isinstance(claims, Mapping) else None
         if not isinstance(subject, str) or not subject:
             raise ApiRequestError(401, "unauthenticated", "Authentication is required")
         if self.allowed_operator_subs is not None and subject not in self.allowed_operator_subs:
             raise ApiRequestError(403, "forbidden", "Operator is not allowed")
         if require_write:
             raw_scope = claims.get("scope", "")
-            scopes = set(raw_scope.split()) if isinstance(raw_scope, str) else set(raw_scope or [])
+            scopes = set(raw_scope.split()) if isinstance(raw_scope, str) else set()
             if "coldchain/write" not in scopes:
                 raise ApiRequestError(403, "forbidden", "coldchain/write scope is required")
         return subject
@@ -256,6 +271,8 @@ class ApiApplication:
         raw = event.get("body")
         if raw is None:
             raise ApiRequestError(422, "invalid_request", "JSON request body is required")
+        if not isinstance(raw, str):
+            raise ApiRequestError(422, "invalid_request", "Request body is invalid")
         try:
             data = (
                 base64.b64decode(raw, validate=True)

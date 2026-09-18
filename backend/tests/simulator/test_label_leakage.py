@@ -16,6 +16,9 @@ FORBIDDEN_MARKERS = {
     "diagnosis",
     "caused_by_door",
     "door_failure",
+    "refrigeration_failure",
+    "sensor_disagreement",
+    "ambiguous_incident",
 }
 
 
@@ -37,7 +40,8 @@ def test_worker_snapshot_contains_no_hidden_truth_markers() -> None:
         exported_strings = [value.lower() for value in _strings(snapshot)]
         for marker in FORBIDDEN_MARKERS:
             assert all(marker not in value for value in exported_strings)
-        assert all(scenario_id not in value for value in exported_strings)
+        for internal_scenario_id in SCENARIO_IDS:
+            assert all(internal_scenario_id not in value for value in exported_strings)
 
 
 def test_identifiers_and_event_sources_are_opaque() -> None:

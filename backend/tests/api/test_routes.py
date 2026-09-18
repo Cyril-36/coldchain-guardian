@@ -308,3 +308,39 @@ def test_storage_and_unexpected_errors_are_sanitized(api_factory, caplog) -> Non
     assert "secret provider traceback" not in combined
     assert "traceback" not in storage_response["body"].lower()
     assert decode(storage_response)["error"]["request_id"] == "request-123"
+
+
+def test_malformed_gateway_context_and_claims_fail_inside_canonical_envelope(api_factory) -> None:
+    app, _, _ = api_factory()
+    no_context = event("GET", "/v1/scenarios")
+    no_context["requestContext"] = None
+    no_context["httpMethod"] = "GET"
+    malformed_authorizer = event("GET", "/v1/scenarios")
+    malformed_authorizer["requestContext"]["authorizer"] = "not-an-object"
+    malformed_scope = event(
+        "POST",
+        "/v1/runs",
+        body={"scenario_id": "normal_control", "seed": 1},
+        headers={"Idempotency-Key": "key"},
+    )
+    malformed_scope["requestContext"]["authorizer"]["jwt"]["claims"]["scope"] = ["coldchain/write"]
+
+    missing_context_response = app.handle(no_context)
+    malformed_authorizer_response = app.handle(malformed_authorizer)
+    malformed_scope_response = app.handle(malformed_scope)
+
+    assert missing_context_response["statusCode"] == 401
+    assert decode(missing_context_response)["error"]["request_id"] == "unknown"
+    assert malformed_authorizer_response["statusCode"] == 401
+    assert malformed_scope_response["statusCode"] == 403
+
+
+def test_malformed_headers_and_non_string_body_are_rejected(api_factory) -> None:
+    app, _, _ = api_factory()
+    bad_headers = event("POST", "/v1/runs", body={"scenario_id": "normal_control"})
+    bad_headers["headers"] = ["Idempotency-Key", "key"]
+    bad_body = event("POST", "/v1/runs", headers={"Idempotency-Key": "key"})
+    bad_body["body"] = {"scenario_id": "normal_control"}
+
+    assert app.handle(bad_headers)["statusCode"] == 422
+    assert app.handle(bad_body)["statusCode"] == 422

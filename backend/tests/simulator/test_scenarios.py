@@ -5,7 +5,7 @@ import pytest
 from coldchain.simulator import generate_snapshot
 
 BASE_TIMESTAMP = datetime(2026, 9, 17, 8, 0, tzinfo=UTC)
-SEEDS = range(20)
+SEEDS = range(50)
 
 
 def _by_sensor(snapshot: dict) -> dict[str, list[dict]]:

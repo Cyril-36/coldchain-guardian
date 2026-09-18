@@ -66,6 +66,20 @@ def test_repeat_post_returns_same_run_without_second_enqueue(api_factory) -> Non
     assert len(queue.messages) == 1
 
 
+def test_repeat_after_completion_returns_same_terminal_run_without_enqueue(api_factory) -> None:
+    app, storage, queue = api_factory()
+    first = _create(app)
+    run_id = decode(first)["run_id"]
+    complete_run(storage, run_id)
+
+    repeated = _create(app)
+
+    assert repeated["statusCode"] == 202
+    assert decode(repeated)["run_id"] == run_id
+    assert decode(repeated)["status"] == "completed"
+    assert len(queue.messages) == 1
+
+
 def test_repeat_preserves_all_preparation_and_snapshot_identity(api_factory) -> None:
     generator_calls: list[tuple[Any, ...]] = []
 
@@ -161,6 +175,36 @@ def test_queue_failure_retains_pending_run_and_retry_resumes_it(api_factory) -> 
     assert generator_calls == 1
 
 
+def test_simulator_failure_after_reservation_is_retryable_on_same_run(api_factory) -> None:
+    calls = 0
+
+    def fail_once_generator(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("private simulator diagnostic")
+        return generate_snapshot(*args, **kwargs)
+
+    app, storage, queue = api_factory(snapshot_generator=fail_once_generator)
+
+    failed = _create(app)
+
+    assert failed["statusCode"] == 503
+    assert decode(failed)["error"]["retryable"] is True
+    assert "private simulator diagnostic" not in failed["body"]
+    run_id = failed["headers"]["x-run-id"]
+    pending = storage.get_run(run_id)
+    assert pending is not None and pending.status == RunStatus.pending_enqueue
+    assert pending.snapshot_ref is None
+    assert queue.messages == []
+
+    retried = _create(app)
+    assert retried["statusCode"] == 202
+    assert decode(retried)["run_id"] == run_id
+    assert calls == 2
+    assert len(queue.messages) == 1
+
+
 class FailingStorage(MemoryStorage):
     def create_or_get_run(self, *args, **kwargs):
         raise TemporaryStorageError("database unavailable")
@@ -175,6 +219,52 @@ def test_storage_failure_before_reservation_does_not_enqueue(api_factory) -> Non
     assert response["statusCode"] == 503
     assert queue.messages == []
     assert decode(response)["error"]["message"] == "Storage is temporarily unavailable"
+
+
+class OperationFailingStorage(MemoryStorage):
+    fail_operation: str | None = None
+
+    def _fail(self, operation: str) -> None:
+        if self.fail_operation == operation:
+            raise TemporaryStorageError("private provider failure")
+
+    def put_snapshot(self, snapshot):
+        self._fail("put_snapshot")
+        return super().put_snapshot(snapshot)
+
+    def attach_snapshot(self, run_id, snapshot_ref):
+        self._fail("attach_snapshot")
+        return super().attach_snapshot(run_id, snapshot_ref)
+
+    def get_report(self, report_ref):
+        self._fail("get_report")
+        return super().get_report(report_ref)
+
+    def create_report_download_url(self, report_ref, expires_in_seconds=300):
+        self._fail("create_report_download_url")
+        return super().create_report_download_url(report_ref, expires_in_seconds)
+
+    def save_review(self, run_id, actor_sub, report_id, decision, note):
+        self._fail("save_review")
+        return super().save_review(run_id, actor_sub, report_id, decision, note)
+
+
+@pytest.mark.parametrize("operation", ["put_snapshot", "attach_snapshot"])
+def test_snapshot_storage_failure_never_enqueues(api_factory, operation: str) -> None:
+    storage = OperationFailingStorage(clock=lambda: NOW)
+    storage.fail_operation = operation
+    queue = FakeQueue()
+    app, _, _ = api_factory(storage=storage, queue=queue)
+
+    response = _create(app)
+
+    assert response["statusCode"] == 503
+    assert decode(response)["error"]["retryable"] is True
+    assert "private provider failure" not in response["body"]
+    assert queue.messages == []
+    run = storage.get_run(response["headers"]["x-run-id"])
+    assert run is not None and run.status == RunStatus.pending_enqueue
+    assert run.snapshot_ref is None
 
 
 class FailOnceMarkQueuedStorage(MemoryStorage):
@@ -385,6 +475,39 @@ def test_both_review_decisions_are_append_only_and_note_limit_is_enforced(api_fa
     assert excessive["statusCode"] == 422
 
 
+def test_review_accepts_exact_note_limit_and_rejects_unknown_decision(api_factory) -> None:
+    app, storage, _ = api_factory()
+    run_id = decode(_create(app))["run_id"]
+    report = complete_run(storage, run_id)
+
+    at_limit = app.handle(
+        event(
+            "POST",
+            f"/v1/runs/{run_id}/review",
+            body={
+                "decision": "acknowledged",
+                "note": "x" * 1000,
+                "report_id": report.report_id,
+            },
+        )
+    )
+    unknown = app.handle(
+        event(
+            "POST",
+            f"/v1/runs/{run_id}/review",
+            body={
+                "decision": "approved",
+                "note": "must not create a safety state",
+                "report_id": report.report_id,
+            },
+        )
+    )
+
+    assert at_limit["statusCode"] == 200
+    assert len(decode(at_limit)["note"]) == 1000
+    assert unknown["statusCode"] == 422
+
+
 def test_non_owner_cannot_read_completed_resources_or_review(api_factory) -> None:
     app, storage, _ = api_factory()
     run_id = decode(_create(app))["run_id"]
@@ -413,6 +536,40 @@ def test_completed_report_is_available_to_owner(api_factory) -> None:
 
     assert response["statusCode"] == 200
     assert decode(response)["report_id"] == report.report_id
+
+
+@pytest.mark.parametrize(
+    ("operation", "method", "suffix", "body"),
+    [
+        ("get_report", "GET", "/report", None),
+        ("create_report_download_url", "GET", "/download", None),
+        (
+            "save_review",
+            "POST",
+            "/review",
+            {"decision": "acknowledged", "note": "checked"},
+        ),
+    ],
+)
+def test_post_completion_storage_failures_are_sanitized(
+    api_factory,
+    operation: str,
+    method: str,
+    suffix: str,
+    body: dict[str, str] | None,
+) -> None:
+    storage = OperationFailingStorage(clock=lambda: NOW)
+    app, _, _ = api_factory(storage=storage)
+    run_id = decode(_create(app))["run_id"]
+    report = complete_run(storage, run_id)
+    storage.fail_operation = operation
+    request_body = None if body is None else {**body, "report_id": report.report_id}
+
+    response = app.handle(event(method, f"/v1/runs/{run_id}{suffix}", body=request_body))
+
+    assert response["statusCode"] == 503
+    assert decode(response)["error"]["retryable"] is True
+    assert "private provider failure" not in response["body"]
 
 
 def test_download_uses_five_minute_signing_window(api_factory) -> None:

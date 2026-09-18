@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import timedelta
+from threading import Barrier
 
 import pytest
 
@@ -13,6 +16,7 @@ from coldchain.storage import (
     ConditionalCheckFailedError,
     DailyLimitExceededError,
     IdempotencyConflictError,
+    NotFoundError,
     StateConflictError,
 )
 from coldchain.storage.memory import MemoryStorage
@@ -75,13 +79,9 @@ def test_run_reservation_persists_retry_identity_atomically(memory: MemoryStorag
 def test_idempotency_conflict_and_active_limit_are_canonical(memory: MemoryStorage) -> None:
     _create(memory)
     with pytest.raises(IdempotencyConflictError):
-        memory.create_or_get_run(
-            "operator-a", "request-key", "changed", run_metadata()
-        )
+        memory.create_or_get_run("operator-a", "request-key", "changed", run_metadata())
     with pytest.raises(ActiveRunLimitExceededError):
-        memory.create_or_get_run(
-            "operator-a", "second-key", "other", run_metadata()
-        )
+        memory.create_or_get_run("operator-a", "second-key", "other", run_metadata())
 
 
 def test_daily_limit_is_atomic() -> None:
@@ -90,6 +90,67 @@ def test_daily_limit_is_atomic() -> None:
     storage.create_or_get_run("a", "a", "a", run_metadata())
     with pytest.raises(DailyLimitExceededError):
         storage.create_or_get_run("b", "b", "b", run_metadata())
+
+
+def test_concurrent_requests_cannot_exceed_daily_limit() -> None:
+    storage = MemoryStorage(clock=lambda: NOW, daily_run_limit=50)
+    for index in range(49):
+        storage.create_or_get_run(
+            f"operator-{index}", f"key-{index}", f"hash-{index}", run_metadata()
+        )
+    barrier = Barrier(2)
+
+    def reserve(index: int) -> bool:
+        barrier.wait()
+        try:
+            storage.create_or_get_run(
+                f"contender-{index}",
+                f"contender-key-{index}",
+                f"contender-hash-{index}",
+                run_metadata(),
+            )
+            return True
+        except DailyLimitExceededError:
+            return False
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(reserve, range(2)))
+
+    assert sorted(results) == [False, True]
+    with pytest.raises(DailyLimitExceededError):
+        storage.create_or_get_run("after-limit", "after", "after", run_metadata())
+
+
+def test_concurrent_active_run_reservations_are_per_operator() -> None:
+    storage = MemoryStorage(clock=lambda: NOW)
+    barrier = Barrier(2)
+
+    def reserve_same_operator(index: int) -> bool:
+        barrier.wait()
+        try:
+            storage.create_or_get_run(
+                "shared-operator", f"key-{index}", f"hash-{index}", run_metadata()
+            )
+            return True
+        except ActiveRunLimitExceededError:
+            return False
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        same_operator = list(executor.map(reserve_same_operator, range(2)))
+    assert sorted(same_operator) == [False, True]
+
+    independent = MemoryStorage(clock=lambda: NOW)
+    barrier = Barrier(2)
+
+    def reserve_distinct_operator(index: int) -> str:
+        barrier.wait()
+        return independent.create_or_get_run(
+            f"operator-{index}", "shared-key", "shared-hash", run_metadata()
+        ).run_id
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        run_ids = list(executor.map(reserve_distinct_operator, range(2)))
+    assert len(set(run_ids)) == 2
 
 
 def test_snapshot_attach_then_queue_transition_is_safe(memory: MemoryStorage, snapshot) -> None:
@@ -126,6 +187,8 @@ def test_claim_retry_and_stage_updates_use_canonical_models(memory: MemoryStorag
     memory.append_stage_event(run.run_id, "two", event)
     loaded = memory.get_run(run.run_id)
     assert loaded.stage_events == [event]
+    with pytest.raises(ConditionalCheckFailedError, match="stage cannot regress"):
+        memory.set_stage(run.run_id, "two", PublicStage.preparing)
     with pytest.raises(ConditionalCheckFailedError):
         memory.set_stage(run.run_id, "one", PublicStage.verifying)
 
@@ -143,6 +206,21 @@ def test_snapshot_and_report_are_immutable_and_digest_checked(
     changed["outcome"] = "unresolved"
     with pytest.raises(StateConflictError):
         memory.put_report(Report.model_validate(changed))
+
+
+@pytest.mark.parametrize("payload", [b"{", b"[]", b"{}"])
+def test_schema_corrupt_artifacts_are_explicit_conflicts(
+    memory: MemoryStorage, report: Report, payload: bytes
+) -> None:
+    reference = memory.put_report(report)
+    memory._corrupt_artifact_for_test(reference.key, payload)
+    matching_reference = ArtifactRef(
+        key=reference.key,
+        sha256=hashlib.sha256(payload).hexdigest(),
+    )
+
+    with pytest.raises(StateConflictError, match="artifact"):
+        memory.get_report(matching_reference)
 
 
 def test_completion_review_public_summary_and_signer(
@@ -190,9 +268,7 @@ def test_completion_review_public_summary_and_signer(
     assert memory.list_public_runs()[0].run_id == run.run_id
     assert memory.create_report_download_url(report_ref, 60).endswith("expires_in=60")
 
-    next_run = memory.create_or_get_run(
-        "operator-a", "next-request", "next-hash", run_metadata()
-    )
+    next_run = memory.create_or_get_run("operator-a", "next-request", "next-hash", run_metadata())
     assert next_run.run_id != run.run_id
 
 
@@ -257,6 +333,70 @@ def test_completion_rejects_another_runs_report(
     assert memory.get_run(run_a.run_id).status == RunStatus.running
 
 
+def test_stale_attempt_cannot_complete_after_lease_replacement(
+    memory: MemoryStorage, snapshot: Snapshot, report: Report
+) -> None:
+    run = _create(
+        memory,
+        run_id=report.run_id,
+        snapshot_id=snapshot.snapshot_id,
+        shipment_id=snapshot.shipment_id,
+    )
+    snapshot_ref = memory.put_snapshot(snapshot)
+    memory.attach_snapshot(run.run_id, snapshot_ref)
+    assert memory.claim_run(run.run_id, "attempt-a", NOW, 1).success
+    assert memory.claim_run(run.run_id, "attempt-b", NOW + timedelta(seconds=2), 60).success
+    bound_report = _bound_report(
+        report,
+        run_id=run.run_id,
+        snapshot=snapshot,
+        snapshot_ref=snapshot_ref,
+    )
+    report_ref = memory.put_report(bound_report)
+
+    with pytest.raises(ConditionalCheckFailedError, match="not current"):
+        memory.complete_run(run.run_id, "attempt-a", RunStatus.completed, report_ref, "stale")
+    memory.complete_run(run.run_id, "attempt-b", RunStatus.completed, report_ref, "done")
+    assert memory.get_run(run.run_id).status == RunStatus.completed
+
+
+def test_duplicate_completion_cannot_replace_terminal_report(
+    memory: MemoryStorage, snapshot: Snapshot, report: Report
+) -> None:
+    run = _create(
+        memory,
+        run_id=report.run_id,
+        snapshot_id=snapshot.snapshot_id,
+        shipment_id=snapshot.shipment_id,
+    )
+    snapshot_ref = memory.put_snapshot(snapshot)
+    memory.attach_snapshot(run.run_id, snapshot_ref)
+    memory.claim_run(run.run_id, "attempt", NOW, 60)
+    first = _bound_report(
+        report,
+        run_id=run.run_id,
+        snapshot=snapshot,
+        snapshot_ref=snapshot_ref,
+    )
+    second = _bound_report(
+        report,
+        run_id=run.run_id,
+        snapshot=snapshot,
+        snapshot_ref=snapshot_ref,
+        report_id=stable_uuid("replacement-report"),
+    )
+    first_ref = memory.put_report(first)
+    second_ref = memory.put_report(second)
+    memory.complete_run(run.run_id, "attempt", RunStatus.completed, first_ref, "done")
+
+    with pytest.raises(ConditionalCheckFailedError, match="different terminal"):
+        memory.complete_run(run.run_id, "attempt", RunStatus.completed, second_ref, "replace")
+    memory.mark_queued(run.run_id)
+    assert not memory.claim_run(run.run_id, "new-attempt", NOW + timedelta(minutes=5), 60).success
+    assert memory.get_run(run.run_id).report_ref == first_ref
+    assert memory.get_run(run.run_id).status == RunStatus.completed
+
+
 def test_failed_completion_does_not_require_report(memory: MemoryStorage) -> None:
     run = _create(memory)
     memory.claim_run(run.run_id, "attempt", NOW, 60)
@@ -264,3 +404,27 @@ def test_failed_completion_does_not_require_report(memory: MemoryStorage) -> Non
     failed = memory.get_run(run.run_id)
     assert failed.status == RunStatus.failed
     assert failed.error.message == "boom"
+
+
+def test_missing_report_artifact_cannot_produce_completed_state(
+    memory: MemoryStorage, snapshot: Snapshot, report: Report
+) -> None:
+    run = _create(
+        memory,
+        run_id=report.run_id,
+        snapshot_id=snapshot.snapshot_id,
+        shipment_id=snapshot.shipment_id,
+    )
+    snapshot_ref = memory.put_snapshot(snapshot)
+    memory.attach_snapshot(run.run_id, snapshot_ref)
+    memory.claim_run(run.run_id, "attempt", NOW, 60)
+    missing_ref = ArtifactRef(
+        key=f"reports/{stable_uuid('missing-report')}.json",
+        sha256="0" * 64,
+    )
+
+    with pytest.raises(NotFoundError, match="artifact"):
+        memory.complete_run(
+            run.run_id, "attempt", RunStatus.completed, missing_ref, "must not complete"
+        )
+    assert memory.get_run(run.run_id).status == RunStatus.running
