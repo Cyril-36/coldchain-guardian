@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import importlib.metadata as md
 import json
+import os
 import sys
 import time
 
@@ -36,6 +37,12 @@ def main() -> int:
     parser.add_argument("--model-id", required=True)
     parser.add_argument("--max-tokens", type=int, default=256)
     args = parser.parse_args()
+
+    # A browser `aws login` session writes only `login_session` into ~/.aws/config,
+    # with no region, so botocore raises NoRegionError even when region_name is passed
+    # to the client. Setting these makes the command self-sufficient.
+    os.environ.setdefault("AWS_REGION", args.region)
+    os.environ.setdefault("AWS_DEFAULT_REGION", args.region)
 
     from strands import Agent, tool
     from strands.models import BedrockModel
