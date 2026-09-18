@@ -16,17 +16,18 @@ install: ## Install backend and frontend dependencies
 	cd $(WEB) && npm install --no-audit --no-fund
 
 test: ## Offline Python and frontend tests
-	$(PY) -m pytest backend/tests
+	$(PY) -m pytest backend/tests eval/tests
 	cd $(WEB) && npm test -- --run
 
 lint: ## Ruff plus frontend typecheck, and the contract example validator
-	$(PY) -m ruff check scripts backend .
+	$(PY) -m ruff check scripts backend eval .
 	$(PY) scripts/check_repo.py
 	$(PY) scripts/validate_examples.py
 	cd $(WEB) && npm run typecheck
 
-eval-offline: ## Deterministic measurement, verifier and rule-baseline checks
-	$(PY) -m pytest backend/tests/core backend/tests/investigation -q
+eval-offline: ## Frozen holdout set against the rule baseline; no model calls
+	$(PY) -m pytest backend/tests/core backend/tests/investigation eval/tests -q
+	$(PY) scripts/run_eval.py --proposer baseline
 
 eval-bedrock: ## Bounded live-model evaluation; must be enabled explicitly
 	@test -n "$(EVAL_BEDROCK)" || { echo 'Refusing to spend model calls. Re-run with EVAL_BEDROCK=1'; exit 1; }

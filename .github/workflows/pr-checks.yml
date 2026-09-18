@@ -22,8 +22,9 @@ jobs:
           set -euo pipefail
           if [ -f backend/pyproject.toml ]; then
             python3 -m pip install -e 'backend[dev]'
-            python3 -m ruff check backend
-            python3 -m pytest backend/tests
+            python3 -m ruff check backend eval scripts
+            python3 -m pytest backend/tests eval/tests
+            PYTHONPATH="$PWD" python3 scripts/run_eval.py --proposer baseline --out "$RUNNER_TEMP/eval"
           else
             echo 'Backend not implemented yet; skipped.'
           fi
