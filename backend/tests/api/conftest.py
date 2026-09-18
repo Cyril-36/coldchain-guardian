@@ -20,12 +20,15 @@ class FakeQueue:
     def __init__(self) -> None:
         self.messages: list[tuple[str, str, str]] = []
         self.failures_remaining = 0
+        self.on_send: Callable[[str, str], None] | None = None
 
     def send_run(self, run_id: str, snapshot_id: str, schema_version: str = "1.0") -> None:
         if self.failures_remaining:
             self.failures_remaining -= 1
             raise TemporaryEnqueueError("queue unavailable")
         self.messages.append((run_id, snapshot_id, schema_version))
+        if self.on_send is not None:
+            self.on_send(run_id, snapshot_id)
 
     def enqueue_run(self, run_id: str, snapshot_id: str, schema_version: str = "1.0") -> None:
         self.send_run(run_id, snapshot_id, schema_version)
@@ -33,19 +36,35 @@ class FakeQueue:
 
 @pytest.fixture
 def api_factory() -> Callable[..., tuple[ApiApplication, MemoryStorage, FakeQueue]]:
-    def factory(*, queue: FakeQueue | None = None, storage: MemoryStorage | None = None):
+    def factory(
+        *,
+        queue: FakeQueue | None = None,
+        storage: MemoryStorage | None = None,
+        snapshot_generator=None,
+        allowed_operator_subs: frozenset[str] | None = None,
+    ):
         ids = count()
         storage = storage or MemoryStorage(
             id_factory=lambda: str(uuid5(NAMESPACE, f"id-{next(ids)}")),
             clock=lambda: NOW,
         )
         queue = queue or FakeQueue()
-        service = ApiService(storage, queue, clock=lambda: NOW, seed_factory=lambda: 917)
+        service_options: dict[str, Any] = {
+            "clock": lambda: NOW,
+            "seed_factory": lambda: 917,
+        }
+        if snapshot_generator is not None:
+            service_options["snapshot_generator"] = snapshot_generator
+        service = ApiService(storage, queue, **service_options)
         return (
             ApiApplication(
                 service,
                 build_sha="abc123",
-                allowed_operator_subs=frozenset({"operator-a", "operator-b"}),
+                allowed_operator_subs=(
+                    allowed_operator_subs
+                    if allowed_operator_subs is not None
+                    else frozenset({"operator-a", "operator-b"})
+                ),
             ),
             storage,
             queue,

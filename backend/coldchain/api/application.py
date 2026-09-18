@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -18,6 +19,8 @@ from .service import ApiService
 _MAX_REQUEST_BYTES = 16_384
 _RUN_ROUTE = re.compile(r"^/v1/runs/([^/]+)(?:/(snapshot|report|download|review))?$")
 _DEMO_ROUTE = re.compile(r"^/v1/demo-runs/([^/]+)(?:/(snapshot|report|download))?$")
+_FIXED_ROUTES = {"/v1/health", "/v1/scenarios", "/v1/runs", "/v1/demo-runs"}
+logger = logging.getLogger(__name__)
 
 
 class ApiRequestError(Exception):
@@ -77,19 +80,60 @@ class ApiApplication:
             code = re.sub(r"(?<!^)(?=[A-Z])", "_", type(error).__name__).lower()
             if code.endswith("_error"):
                 code = code[:-6]
-            response = self._error(
-                error.status_code, code, str(error).strip("'"), request_id, error.retryable
-            )
             run_id = getattr(error, "run_id", None)
+            logger.warning(
+                "api_storage_error request_id=%s run_id=%s category=%s status=%s",
+                request_id,
+                run_id if isinstance(run_id, str) else "-",
+                type(error).__name__,
+                error.status_code,
+            )
+            response = self._error(
+                error.status_code,
+                code,
+                self._storage_error_message(code),
+                request_id,
+                error.retryable,
+            )
             if isinstance(run_id, str):
                 response = HttpResponse(response.status_code, response.body, {"x-run-id": run_id})
         except ValueError as error:
             response = self._error(422, "invalid_request", str(error), request_id, False)
-        except Exception:
+        except Exception as error:
+            logger.error(
+                "api_unexpected_error request_id=%s category=%s",
+                request_id,
+                type(error).__name__,
+            )
             response = self._error(
                 500, "internal_error", "An unexpected error occurred", request_id, True
             )
+        response_body = response.body if isinstance(response.body, dict) else {}
+        logger.info(
+            "api_request request_id=%s run_id=%s status=%s stage=%s",
+            request_id,
+            response_body.get("run_id", "-"),
+            response.status_code,
+            response_body.get("stage", "-"),
+        )
         return response.as_lambda_result()
+
+    @staticmethod
+    def _storage_error_message(code: str) -> str:
+        messages = {
+            "not_found": "Resource not found",
+            "idempotency_conflict": "Idempotency key was reused with different request content",
+            "conditional_check_failed": "The requested state transition conflicted",
+            "state_conflict": "The requested operation conflicts with current state",
+            "report_not_ready": "Report is not ready",
+            "limit_exceeded": "Run limit reached",
+            "daily_limit_exceeded": "UTC daily run limit reached",
+            "active_run_limit_exceeded": "Operator already has an active run",
+            "temporary_storage": "Storage is temporarily unavailable",
+            "queue": "Queue is temporarily unavailable",
+            "temporary_enqueue": "Queue delivery is temporarily unavailable",
+        }
+        return messages.get(code, "The request could not be completed")
 
     @staticmethod
     def _error(
@@ -143,12 +187,17 @@ class ApiApplication:
             return HttpResponse(200, self.service.scenarios())
         if method == "POST" and path == "/v1/runs":
             owner_sub = self._operator(event, require_write=True)
+            body = self._body(event)
+            if isinstance(body, dict):
+                seed = body.get("seed")
+                if seed is not None and (isinstance(seed, bool) or not isinstance(seed, int)):
+                    raise ApiRequestError(422, "invalid_request", "seed must be an integer")
+            request = CreateRunRequest.model_validate(body)
             key = headers.get("idempotency-key", "")
             if not key.strip() or len(key) > 200:
                 raise ApiRequestError(
                     422, "invalid_idempotency_key", "Idempotency-Key must be 1-200 characters"
                 )
-            request = CreateRunRequest.model_validate(self._body(event))
             response = self.service.create_run(owner_sub, key, request)
             return HttpResponse(202, _dump(response))
 
@@ -157,7 +206,7 @@ class ApiApplication:
             resource = run_match.group(2)
             require_write = method == "POST" and resource == "review"
             if not ((method == "GET" and resource != "review") or require_write):
-                raise ApiRequestError(404, "not_found", "Route not found")
+                raise ApiRequestError(405, "method_not_allowed", "Method not allowed")
             owner_sub = self._operator(event, require_write=require_write)
             run = self.service.get_owned_run(run_match.group(1), owner_sub)
             if resource == "snapshot":
@@ -173,6 +222,8 @@ class ApiApplication:
                 return HttpResponse(200, _dump(review))
             return HttpResponse(200, _dump(run))
 
+        if path in _FIXED_ROUTES or _RUN_ROUTE.fullmatch(path) or _DEMO_ROUTE.fullmatch(path):
+            raise ApiRequestError(405, "method_not_allowed", "Method not allowed")
         raise ApiRequestError(404, "not_found", "Route not found")
 
     def _operator(self, event: dict[str, Any], *, require_write: bool) -> str:

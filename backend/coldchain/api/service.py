@@ -76,11 +76,13 @@ class ApiService:
         *,
         clock: Callable[[], datetime] | None = None,
         seed_factory: Callable[[], int] | None = None,
+        snapshot_generator: Callable[..., dict[str, Any]] = generate_snapshot,
     ) -> None:
         self.storage = storage
         self.queue = queue
         self._clock = clock or (lambda: datetime.now(UTC))
         self._seed_factory = seed_factory or (lambda: secrets.randbits(63))
+        self._snapshot_generator = snapshot_generator
 
     @staticmethod
     def scenarios() -> list[dict[str, str]]:
@@ -94,9 +96,6 @@ class ApiService:
     ) -> RunResponse:
         if request.scenario_id not in SCENARIO_IDS:
             raise ValueError("unsupported scenario_id")
-        if isinstance(request.seed, bool):
-            raise ValueError("seed must be an integer")
-
         now = self._clock().astimezone(UTC).replace(microsecond=0)
         metadata: dict[str, Any] = {
             "scenario_id": request.scenario_id,
@@ -117,7 +116,7 @@ class ApiService:
                     if preparation is None:
                         raise TemporaryEnqueueError("run preparation metadata is unavailable")
                     snapshot = Snapshot.model_validate(
-                        generate_snapshot(
+                        self._snapshot_generator(
                             preparation.scenario_id,
                             preparation.seed,
                             preparation.base_timestamp,
