@@ -1,0 +1,305 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: ColdChain Guardian synthetic investigation backend
+
+Parameters:
+  FrontendOrigin:
+    Type: String
+    Description: Exact operator UI origin, without a trailing slash
+    Default: http://localhost:5173
+  CognitoDomainPrefix:
+    Type: String
+    Description: Globally unique Cognito managed-login domain prefix
+    MinLength: 1
+  AllowedOperatorSubs:
+    Type: String
+    Description: Comma-separated Cognito subject IDs for the three operators
+    MinLength: 1
+  BedrockModelId:
+    Type: String
+    Default: amazon.nova-lite-v1:0
+    Description: Foundation model ID validated in this account and region
+  BuildSha:
+    Type: String
+    Default: local
+
+Resources:
+  RunTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteSyntheticArtifactsAfter30Days
+            Status: Enabled
+            ExpirationInDays: 30
+
+  DeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: 604800
+
+  InvestigationQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      VisibilityTimeout: 720
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DeadLetterQueue.Arn
+        maxReceiveCount: 3
+
+  OperatorPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      AutoVerifiedAttributes:
+        - email
+      UsernameAttributes:
+        - email
+
+  OperatorResourceServer:
+    Type: AWS::Cognito::UserPoolResourceServer
+    Properties:
+      UserPoolId: !Ref OperatorPool
+      Identifier: coldchain
+      Name: ColdChain Guardian
+      Scopes:
+        - ScopeName: write
+          ScopeDescription: Create and review synthetic investigation runs
+
+  OperatorClient:
+    Type: AWS::Cognito::UserPoolClient
+    DependsOn: OperatorResourceServer
+    Properties:
+      UserPoolId: !Ref OperatorPool
+      GenerateSecret: false
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthScopes:
+        - openid
+        - email
+        - coldchain/write
+      CallbackURLs:
+        - !Ref FrontendOrigin
+      LogoutURLs:
+        - !Ref FrontendOrigin
+      SupportedIdentityProviders:
+        - COGNITO
+
+  OperatorDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      UserPoolId: !Ref OperatorPool
+      Domain: !Ref CognitoDomainPrefix
+
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins:
+          - !Ref FrontendOrigin
+        AllowHeaders:
+          - Authorization
+          - Content-Type
+          - Idempotency-Key
+        AllowMethods:
+          - GET
+          - POST
+          - OPTIONS
+        MaxAge: 600
+      Auth:
+        DefaultAuthorizer: OperatorJwt
+        Authorizers:
+          OperatorJwt:
+            AuthorizationScopes:
+              - coldchain/write
+            JwtConfiguration:
+              issuer: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${OperatorPool}
+              audience:
+                - !Ref OperatorClient
+            IdentitySource: $request.header.Authorization
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../backend/
+      Handler: coldchain.api.handler.lambda_handler
+      Runtime: python3.12
+      Architectures:
+        - arm64
+      Timeout: 20
+      MemorySize: 512
+      Environment:
+        Variables:
+          ARTIFACT_BUCKET: !Ref ArtifactBucket
+          RUNS_TABLE: !Ref RunTable
+          INVESTIGATION_QUEUE_URL: !Ref InvestigationQueue
+          ALLOWED_OPERATOR_SUBS: !Ref AllowedOperatorSubs
+          BUILD_SHA: !Ref BuildSha
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+                - dynamodb:DeleteItem
+                - dynamodb:Query
+                - dynamodb:TransactWriteItems
+              Resource: !GetAtt RunTable.Arn
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:PutObject
+              Resource:
+                - !Sub ${ArtifactBucket.Arn}/snapshots/*
+                - !Sub ${ArtifactBucket.Arn}/reports/*
+            - Effect: Allow
+              Action: sqs:SendMessage
+              Resource: !GetAtt InvestigationQueue.Arn
+      Events:
+        Protected:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /v1/{proxy+}
+            Method: ANY
+        Health:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /v1/health
+            Method: GET
+            Auth:
+              Authorizer: NONE
+        Scenarios:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /v1/scenarios
+            Method: GET
+            Auth:
+              Authorizer: NONE
+        DemoList:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /v1/demo-runs
+            Method: GET
+            Auth:
+              Authorizer: NONE
+        DemoGet:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /v1/demo-runs/{run_id}
+            Method: GET
+            Auth:
+              Authorizer: NONE
+        DemoArtifact:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /v1/demo-runs/{run_id}/{artifact}
+            Method: GET
+            Auth:
+              Authorizer: NONE
+
+  WorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../backend/
+      Handler: coldchain.worker.handler.lambda_handler
+      Runtime: python3.12
+      Architectures:
+        - arm64
+      Timeout: 120
+      MemorySize: 1024
+      ReservedConcurrentExecutions: 2
+      Environment:
+        Variables:
+          ARTIFACT_BUCKET: !Ref ArtifactBucket
+          RUNS_TABLE: !Ref RunTable
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt RunTable.Arn
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:PutObject
+              Resource:
+                - !Sub ${ArtifactBucket.Arn}/snapshots/*
+                - !Sub ${ArtifactBucket.Arn}/reports/*
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+                - bedrock:InvokeModelWithResponseStream
+              Resource: !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${BedrockModelId}
+      Events:
+        Investigation:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt InvestigationQueue.Arn
+            BatchSize: 1
+            ScalingConfig:
+              MaximumConcurrency: 2
+
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ApiFunction}
+      RetentionInDays: 7
+
+  WorkerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${WorkerFunction}
+      RetentionInDays: 7
+
+Outputs:
+  ApiBaseUrl:
+    Value: !Sub https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com
+  UserPoolId:
+    Value: !Ref OperatorPool
+  UserPoolClientId:
+    Value: !Ref OperatorClient
+  CognitoAuthority:
+    Value: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${OperatorPool}
+  CognitoDomain:
+    Value: !Sub https://${CognitoDomainPrefix}.auth.${AWS::Region}.amazoncognito.com
+  DeadLetterQueueUrl:
+    Value: !Ref DeadLetterQueue
