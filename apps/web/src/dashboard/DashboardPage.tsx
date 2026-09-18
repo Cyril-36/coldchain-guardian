@@ -49,10 +49,10 @@ export function formatDuration(seconds: number | null | undefined): string {
 
 function MetricCard({ label, value, detail, tone }: { label: string; value: string; detail: string; tone: "critical" | "review" | "info" }) {
   return (
-    <article className="rounded-[10px] border border-slate-200 bg-white p-4 shadow-sm">
-      <p className="text-xs font-semibold text-slate-600">{label}</p>
-      <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">{value}</p>
-      <p className={`mt-1 text-[11px] font-medium ${tone === "critical" ? "text-red-700" : tone === "review" ? "text-amber-700" : "text-cyan-700"}`}>
+    <article className={`metric-card metric-card--${tone}`}>
+      <div className="metric-label">{label}</div>
+      <div className="metric-value">{value}</div>
+      <div className="metric-detail">
         {detail}
       </p>
     </article>
@@ -240,8 +240,8 @@ export function DashboardPage() {
   };
 
   return (
-    <main className="min-h-screen bg-slate-50 text-slate-950">
-      <div className="mx-auto max-w-[1440px] p-5 lg:p-8">
+    <main className="app-shell min-h-screen text-slate-950">
+      <div className="app-container mx-auto max-w-[1440px] p-5 lg:p-8">
         {live.source === "fixture" && (
           <div role="status" className="dashboard-chrome mb-3 rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-xs font-medium text-amber-800">
             Demo fixture mode — no live backend data is being shown.
@@ -263,13 +263,12 @@ export function DashboardPage() {
           </div>
         )}
 
-        <header className="dashboard-chrome flex flex-wrap items-center gap-4 rounded-[10px] border border-slate-200 bg-white px-6 py-4 shadow-sm">
-          <div className="min-w-[240px] flex-1">
-            <h1 className="text-xl font-semibold">ColdChain Guardian</h1>
-            <p className="text-xs text-slate-400">Simulated shipment · AWS-backed processing</p>
+        <header className="dashboard-chrome hero-header">
+          <div className="brand-lockup">
+            <div className="brand-title"><span className="brand-mark" aria-hidden="true">CG</span><h1>ColdChain Guardian</h1></div>
+            <p>Shipment intelligence &amp; investigation workspace</p>
           </div>
-          <label className="text-xs font-semibold text-slate-600">
-            Demo case
+          <label className="case-control"><span>Demo case</span>
             <select
               aria-label="Demo case"
               value={live.selectedDemoId ?? live.demoRuns[0]?.run_id ?? "door"}
@@ -281,7 +280,7 @@ export function DashboardPage() {
                   navigation.assign(`${window.location.pathname}?case=${encodeURIComponent(val)}`);
                 }
               }}
-              className="ml-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-normal text-slate-950"
+              className="case-select"
             >
               {live.demoRuns.map((demo) => (
                 <option key={demo.run_id} value={demo.run_id}>
@@ -294,7 +293,7 @@ export function DashboardPage() {
             type="button"
             onClick={() => void handleRun()}
             disabled={auth.loading || actions.runCreating}
-            className="rounded-md bg-[#123B5D] px-4 py-2.5 text-xs font-semibold text-white disabled:opacity-60"
+            className="btn btn-primary"
           >
             {auth.loading ? "Checking session…" : actions.runCreating ? "Submitting run…" : "Run investigation"}
           </button>
@@ -302,28 +301,28 @@ export function DashboardPage() {
             type="button"
             onClick={() => window.print()}
             disabled={!isReportReady}
-            className="rounded-md border border-slate-200 bg-white px-4 py-2.5 text-xs font-semibold text-[#123B5D] disabled:opacity-50"
+            className="btn btn-secondary"
             aria-label="Print investigation report"
           >
             Print report
           </button>
         </header>
 
-        <div className="dashboard-chrome flex flex-wrap items-center gap-x-6 gap-y-2 px-1 py-3 text-xs">
-          <span className="font-semibold text-slate-600">Shipment {run.shipment_id.slice(-8)}</span>
-          <span className="text-slate-600">Policy {snapshot.policy.policy_id}-{snapshot.policy.policy_version} · {snapshot.policy.min_c}°C–{snapshot.policy.max_c}°C</span>
-          <span className="text-slate-400">Cutoff {new Date(snapshot.cutoff_at).toLocaleDateString("en-GB")} · {formatTime(snapshot.cutoff_at)} UTC</span>
-          <span className="rounded px-2 py-1 font-semibold text-amber-700 bg-amber-50">SIMULATED</span>
+        <div className="dashboard-chrome run-context">
+          <span><strong>Shipment</strong> {run.shipment_id.slice(-8)}</span>
+          <span><strong>Policy</strong> {snapshot.policy.policy_id}-{snapshot.policy.policy_version} · {snapshot.policy.min_c}°C–{snapshot.policy.max_c}°C</span>
+          <span><strong>Cutoff</strong> {new Date(snapshot.cutoff_at).toLocaleDateString("en-GB")} · {formatTime(snapshot.cutoff_at)} UTC</span>
+          <span className="context-pill context-pill--simulated">SIMULATED</span>
           {isReportReady && report.generation_mode === "deterministic_only" && (
-            <span className="rounded px-2 py-1 font-semibold text-sky-800 bg-sky-50">DETERMINISTIC ONLY</span>
+            <span className="context-pill context-pill--deterministic">DETERMINISTIC ONLY</span>
           )}
           {isReportReady && report.generation_mode === "bedrock" && (
-            <span className="rounded px-2 py-1 font-semibold text-purple-800 bg-purple-50">BEDROCK AGENT</span>
+            <span className="context-pill context-pill--agent">BEDROCK AGENT</span>
           )}
         </div>
 
         <div className="dashboard-content">
-          <section aria-label="Investigation summary" className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <section aria-label="Investigation summary" className="metric-grid">
             <MetricCard
               label="Observed peak"
               value={observedPeak == null ? "—" : `${observedPeak}°C`}
@@ -358,13 +357,13 @@ export function DashboardPage() {
             />
           </section>
 
-          <section className="mt-3">
+          <section className="telemetry-section mt-4">
             <TelemetryChart snapshot={snapshot} highlightedRecordIds={selectedRecordIds} onRecordSelect={(ids) => setSelectedRecordIds(new Set(ids))} />
           </section>
 
-          <section className="mt-3 grid gap-3 lg:grid-cols-3">
-            <article className="rounded-[10px] border border-slate-200 bg-white p-5 shadow-sm">
-              <h2 className="text-lg font-semibold">Investigation stages</h2>
+          <section className="insight-grid mt-4">
+            <article className="panel-card">
+              <div className="panel-head"><div><span className="eyebrow">WORKFLOW</span><h2>Investigation stages</h2></div><span className="mini-status">{stageLabels[run.stage] ?? run.stage}</span></div>
               <div className="mt-5 space-y-3">
                 {run.stage_events.length > 0 ? (
                   run.stage_events.map((stage) => (
@@ -381,9 +380,7 @@ export function DashboardPage() {
             </article>
 
             <article className="rounded-[10px] border border-slate-200 bg-white p-5 shadow-sm">
-              <h2 className="text-lg font-semibold">
-                {!isReportReady ? "Investigation in progress" : "Main finding"}
-              </h2>
+              <div className="panel-head"><div><span className="eyebrow">INVESTIGATION RESULT</span><h2>{!isReportReady ? "Investigation in progress" : "Main finding"}</h2></div>{isReportReady && <span className={`mini-status ${report.outcome === "unresolved" ? "mini-status--warning" : "mini-status--success"}`}>{report.outcome === "unresolved" ? "UNRESOLVED" : "HYPOTHESIS SUPPORTED"}</span>}</div>
               {!isReportReady ? (
                 <div className="mt-4">
                   <div className="flex items-center gap-2">
@@ -408,10 +405,10 @@ export function DashboardPage() {
                 </div>
               ) : (
                 <>
-                  <p className={`mt-4 text-sm font-semibold ${report.outcome === "no_excursion" ? "text-green-700" : report.outcome === "unresolved" ? "text-amber-700" : "text-red-700"}`}>
+                  <p className={`finding-title ${report.outcome === "no_excursion" ? "finding-title--normal" : report.outcome === "unresolved" ? "finding-title--warning" : ""}`}>
                     {copy.title}
                   </p>
-                  <p className="mt-2 text-xs leading-5 text-slate-600">{copy.detail}</p>
+                  <p className="finding-detail">{copy.detail}</p>
                   {report.outcome === "unresolved" && (
                     <div role="alert" className="mt-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
                       <p className="font-semibold">⚠️ Prominent Uncertainty</p>
@@ -451,7 +448,7 @@ export function DashboardPage() {
             </article>
 
             <article className="rounded-[10px] border border-slate-200 bg-white p-5 shadow-sm">
-              <h2 className="text-lg font-semibold">Supporting &amp; conflicting evidence</h2>
+              <div className="panel-head"><div><span className="eyebrow">EVIDENCE TRAIL</span><h2>Supporting &amp; conflicting evidence</h2></div><span className="mini-status">{evidence.length} citations</span></div>
               <div className="mt-4 space-y-2">
                 {!isReportReady ? (
                   <p className="text-xs text-slate-500">Evidence citations will appear once analysis completes.</p>
@@ -468,9 +465,9 @@ export function DashboardPage() {
                         type="button"
                         aria-pressed={active}
                         onClick={() => setSelectedRecordIds(active ? new Set() : new Set(ids))}
-                        className={`w-full rounded-md p-3 text-left transition ${active ? "bg-amber-50 ring-1 ring-amber-300" : "bg-slate-50 hover:bg-slate-100"}`}
+                        className={`evidence-item ${active ? "evidence-item--active" : ""}`}
                       >
-                        <p className="text-[11px] font-semibold">{title}</p>
+                        <span className="evidence-copy"><span>{title}</span><small>{"evidence_id" in item ? `${item.record_ids.length} record${item.record_ids.length === 1 ? "" : "s"}` : "View on timeline"}</small></span><span className="evidence-arrow" aria-hidden="true">↗</span>
                       </button>
                     );
                   })
@@ -479,9 +476,9 @@ export function DashboardPage() {
             </article>
           </section>
 
-          <section className="dashboard-chrome mt-3 grid gap-3 lg:grid-cols-[2fr_1fr]">
-            <article className="rounded-[10px] border border-slate-200 bg-white p-5 shadow-sm">
-              <h2 className="text-base font-semibold">Operator review</h2>
+          <section className="dashboard-chrome review-grid mt-4">
+            <article className="review-card">
+              <div className="panel-head"><div><span className="eyebrow">HUMAN REVIEW</span><h2>Operator review</h2></div><span className="mini-status mini-status--warning">REQUIRED</span></div>
               <p className="mt-1 text-[11px] text-slate-500">
                 Review acknowledgement records operator review only and does not constitute shipment release or professional QA approval.
               </p>
@@ -510,7 +507,7 @@ export function DashboardPage() {
                           type="button"
                           disabled={(!isProtectedRun && live.source !== "fixture") || !reviewNote.trim() || actions.reviewSubmitting}
                           onClick={() => void handleReview("acknowledged")}
-                          className="rounded-md bg-[#123B5D] px-3 py-2 text-[11px] font-semibold text-white disabled:opacity-50"
+                          className="btn btn-primary btn-small disabled:opacity-50"
                         >
                           Acknowledge review
                         </button>
@@ -518,7 +515,7 @@ export function DashboardPage() {
                           type="button"
                           disabled={(!isProtectedRun && live.source !== "fixture") || !reviewNote.trim() || actions.reviewSubmitting}
                           onClick={() => void handleReview("request_more_evidence")}
-                          className="rounded-md border border-slate-200 px-3 py-2 text-[11px] font-semibold text-[#123B5D] disabled:opacity-50"
+                          className="btn btn-secondary btn-small disabled:opacity-50"
                         >
                           Request evidence
                         </button>
@@ -529,7 +526,7 @@ export function DashboardPage() {
                         maxLength={1000}
                         placeholder="Add review note…"
                         aria-label="Review note"
-                        className="mt-3 h-14 w-full rounded-md border border-slate-200 bg-slate-50 p-3 text-xs"
+                        className="review-textarea mt-3"
                       />
                       <p className="mt-1 text-right text-[10px] text-slate-400" aria-live="polite">
                         {reviewNote.length}/1000
@@ -540,8 +537,8 @@ export function DashboardPage() {
               )}
             </article>
 
-            <article className="rounded-[10px] border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="flex items-center justify-between">
+            <article className="report-card">
+              <div className="panel-head">
                 <div>
                   <h2 className="text-base font-semibold">{isReportReady ? "Report ready" : "Report pending"}</h2>
                   <p className={`text-[10px] ${!isReportReady ? "text-slate-500" : (report.verification.status === "passed" ? "text-green-700" : "text-amber-700")}`}>
