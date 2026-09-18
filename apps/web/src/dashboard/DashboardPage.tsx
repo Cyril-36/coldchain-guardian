@@ -24,13 +24,27 @@ function formatTime(value: string) {
   return new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" }).format(new Date(value));
 }
 
-export function formatDuration(seconds: number | null): string {
+export function formatDuration(seconds: number | null | undefined): string {
   if (seconds == null) return "—";
-  if (seconds === 0) return "0s";
-  if (seconds < 60) return `${Math.round(seconds)}s`;
-  const mins = Math.floor(seconds / 60);
-  const remSecs = Math.round(seconds % 60);
-  return remSecs > 0 ? `${mins} min ${remSecs}s` : `${mins} min`;
+  if (seconds <= 0) return "0s";
+
+  const total = Number(seconds.toFixed(1));
+  const formatSecs = (val: number) => (Number.isInteger(val) ? `${val}` : `${val.toFixed(1)}`);
+
+  if (total < 60) {
+    return `${formatSecs(total)}s`;
+  }
+
+  const mins = Math.floor(total / 60);
+  const remSecs = Number((total - mins * 60).toFixed(1));
+
+  if (remSecs === 60) {
+    return `${mins + 1} min`;
+  }
+  if (remSecs === 0) {
+    return `${mins} min`;
+  }
+  return `${mins} min ${formatSecs(remSecs)}s`;
 }
 
 function MetricCard({ label, value, detail, tone }: { label: string; value: string; detail: string; tone: "critical" | "review" | "info" }) {
@@ -543,13 +557,15 @@ export function DashboardPage() {
                   Download
                 </button>
               </div>
-              <details className="mt-3">
-                <summary className="cursor-pointer text-[10px] font-semibold">Diagnostics</summary>
-                <p className="mt-2 text-[10px] text-slate-500">Run ID: {run.run_id}</p>
-                <p className="text-[10px] text-slate-500">Report ID: {isReportReady ? report.report_id : "Pending"}</p>
-                <p className="text-[10px] text-slate-500">Snapshot SHA-256: {isReportReady ? report.snapshot_sha256 : "Pending"}</p>
-                <p className="text-[10px] text-slate-500">Generation: {isReportReady ? report.generation_mode : (run.generation_mode ?? "Pending")}</p>
-              </details>
+              {isReportReady && (
+                <details className="mt-3">
+                  <summary className="cursor-pointer text-[10px] font-semibold">Diagnostics</summary>
+                  <p className="mt-2 text-[10px] text-slate-500">Run ID: {run.run_id}</p>
+                  <p className="text-[10px] text-slate-500">Report ID: {report.report_id}</p>
+                  <p className="text-[10px] text-slate-500">Snapshot SHA-256: {report.snapshot_sha256}</p>
+                  <p className="text-[10px] text-slate-500">Generation: {report.generation_mode}</p>
+                </details>
+              )}
             </article>
           </section>
         </div>

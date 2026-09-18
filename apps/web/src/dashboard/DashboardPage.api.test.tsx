@@ -565,6 +565,13 @@ describe("DashboardPage API-backed interactions", () => {
     // Evidence and operator review notes reflect pending state
     expect(screen.getByText("Evidence citations will appear once analysis completes.")).toBeInTheDocument();
     expect(screen.getByText("Operator review is enabled once the investigation report is complete.")).toBeInTheDocument();
+
+    // Print report and report diagnostics are omitted while report is pending (no fixture report exposed)
+    expect(document.querySelector(".print-report")).not.toBeInTheDocument();
+    expect(screen.queryByText("Diagnostics")).not.toBeInTheDocument();
+    expect(screen.queryByText(/00000000-0000-0000-0000-000000002042/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Print investigation report" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Download" })).toBeDisabled();
   });
 
   it("selects reference sensor over non-reference sensor and formats sub-minute excursion durations as seconds", async () => {
