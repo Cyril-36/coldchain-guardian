@@ -38,12 +38,12 @@ def _ts(dt: datetime) -> float:
     return dt.timestamp()
 
 
-def _out_of_range(temp: float, min_c: float, max_c: float) -> bool:
+def is_out_of_range(temp: float, min_c: float, max_c: float) -> bool:
     """Strictly below min or strictly above max is out of range."""
     return temp < min_c or temp > max_c
 
 
-def _segment_excursion_intervals(
+def segment_excursion_intervals(
     t1: float,
     v1: float,
     t2: float,
@@ -119,7 +119,7 @@ def _interval_out_seconds(
     max_c: float,
 ) -> float:
     """Return the seconds within [t1, t2] where interpolated temp is outside [min_c, max_c]."""
-    intervals = _segment_excursion_intervals(t1, v1, t2, v2, min_c, max_c)
+    intervals = segment_excursion_intervals(t1, v1, t2, v2, min_c, max_c)
     return sum(end - start for start, end in intervals)
 
 
@@ -230,7 +230,7 @@ def detect_excursions(
         observed_max = round(max(temps), 2)
 
         # ── Flag out-of-range readings ──────────────────────────────────
-        flagged = [_out_of_range(r.temperature_c, policy.min_c, policy.max_c) for r in readings]
+        flagged = [is_out_of_range(r.temperature_c, policy.min_c, policy.max_c) for r in readings]
 
         first_out_at: datetime | None = None
         last_out_at: datetime | None = None
@@ -320,7 +320,7 @@ def _get_sensor_excursion_windows(
 
     if len(readings) == 1:
         r = readings[0]
-        if _out_of_range(r.temperature_c, policy.min_c, policy.max_c):
+        if is_out_of_range(r.temperature_c, policy.min_c, policy.max_c):
             t = _ts(r.observed_at)
             return [(t, t)]
         return []
@@ -337,8 +337,8 @@ def _get_sensor_excursion_windows(
             # If both endpoints are out of range with no observed in-range data between them,
             # we cannot claim multiple windows (it may be a single continuous excursion).
             # Bridge them for window counting so the gap does not create an artificial split.
-            out1 = _out_of_range(r1.temperature_c, policy.min_c, policy.max_c)
-            out2 = _out_of_range(r2.temperature_c, policy.min_c, policy.max_c)
+            out1 = is_out_of_range(r1.temperature_c, policy.min_c, policy.max_c)
+            out2 = is_out_of_range(r2.temperature_c, policy.min_c, policy.max_c)
             if out1 and out2:
                 raw_intervals.append((t1, t2))
             elif out1:
@@ -346,7 +346,7 @@ def _get_sensor_excursion_windows(
             elif out2:
                 raw_intervals.append((t2, t2))
         else:
-            seg_intervals = _segment_excursion_intervals(
+            seg_intervals = segment_excursion_intervals(
                 t1, r1.temperature_c, t2, r2.temperature_c, policy.min_c, policy.max_c
             )
             raw_intervals.extend(seg_intervals)
