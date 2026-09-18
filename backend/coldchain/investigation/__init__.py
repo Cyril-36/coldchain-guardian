@@ -1,6 +1,9 @@
 """Investigation and deterministic evidence tools for ColdChain Guardian."""
 
 from coldchain.investigation.tools import (
+    MAX_ALIGNMENT_OFFSET_SECONDS,
+    MAX_RETURNED_ALIGNED_READINGS,
+    MAX_RETURNED_EVENTS,
     TOOLS_VERSION,
     ToolContext,
     get_door_events,
@@ -12,6 +15,9 @@ from coldchain.investigation.tools import (
 )
 
 __all__ = [
+    "MAX_ALIGNMENT_OFFSET_SECONDS",
+    "MAX_RETURNED_ALIGNED_READINGS",
+    "MAX_RETURNED_EVENTS",
     "TOOLS_VERSION",
     "ToolContext",
     "get_door_events",

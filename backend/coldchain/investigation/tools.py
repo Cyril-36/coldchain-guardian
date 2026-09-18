@@ -8,6 +8,7 @@ records outside the authorized snapshot.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Any
 
 from coldchain.contracts.enums import (
@@ -16,6 +17,7 @@ from coldchain.contracts.enums import (
     SensorRole,
 )
 from coldchain.contracts.schemas import (
+    Event,
     EvidenceInterval,
     EvidenceRef,
     Reading,
@@ -30,6 +32,9 @@ from coldchain.core.detector import (
 TOOLS_VERSION = "1.0.0"
 
 DISAGREEMENT_THRESHOLD_C = 1.5
+MAX_ALIGNMENT_OFFSET_SECONDS = 30.0
+MAX_RETURNED_ALIGNED_READINGS = 10
+MAX_RETURNED_EVENTS = 10
 
 
 class ToolContext:
@@ -67,10 +72,48 @@ class ToolContext:
         self.snapshot = snapshot
         self.run_id = run_id
 
+        # Deterministically compute expected measurements from core detector
+        expected_measurements = detect_excursions(snapshot, snapshot.policy)
+        expected_by_sensor = {m.sensor_id: m for m in expected_measurements}
+        configured_sensor_ids = {s.sensor_id for s in snapshot.sensors}
+
+        # If caller provides measurements, strictly validate them against the detector result
         if measurements is not None:
-            self.measurements = list(measurements)
+            supplied_sensor_ids = [m.sensor_id for m in measurements]
+            for m in measurements:
+                if m.sensor_id not in configured_sensor_ids:
+                    raise ValueError(
+                        f"Supplied measurement references unknown sensor: {m.sensor_id}"
+                    )
+            if set(supplied_sensor_ids) != configured_sensor_ids or len(supplied_sensor_ids) != len(
+                configured_sensor_ids
+            ):
+                raise ValueError(
+                    f"Supplied measurements do not match snapshot sensors: {supplied_sensor_ids}"
+                )
+            for m in measurements:
+                exp = expected_by_sensor[m.sensor_id]
+                if (
+                    m.estimated_out_of_range_seconds != exp.estimated_out_of_range_seconds
+                    or m.unknown_duration_seconds != exp.unknown_duration_seconds
+                    or m.observed_min_c != exp.observed_min_c
+                    or m.observed_max_c != exp.observed_max_c
+                    or m.censored_start != exp.censored_start
+                    or m.censored_end != exp.censored_end
+                    or m.coverage_status != exp.coverage_status
+                    or m.sample_count != exp.sample_count
+                    or m.first_observed_out_at != exp.first_observed_out_at
+                    or m.last_observed_out_at != exp.last_observed_out_at
+                ):
+                    raise ValueError(
+                        f"Supplied measurement for sensor {m.sensor_id} does not match "
+                        f"deterministic detector result: "
+                        f"estimated_out_of_range_seconds={m.estimated_out_of_range_seconds} "
+                        f"(expected {exp.estimated_out_of_range_seconds})."
+                    )
+            self.measurements = list(expected_measurements)
         else:
-            self.measurements = detect_excursions(snapshot, snapshot.policy)
+            self.measurements = list(expected_measurements)
 
         self._valid_record_ids: set[str] = {
             r.event_id for r in snapshot.readings
@@ -141,8 +184,10 @@ def get_excursion_summary(ctx: ToolContext) -> dict[str, Any]:
 
     for m in ctx.measurements:
         sensor = sensors_by_id.get(m.sensor_id)
-        role_str = sensor.role.value if sensor else m.role.value
-        placement_str = sensor.placement if sensor else "unknown"
+        if sensor is None:
+            raise ValueError(f"Measurement references unknown sensor: {m.sensor_id}")
+        role_str = sensor.role.value
+        placement_str = sensor.placement
         ev_id = m.evidence_ids[0] if m.evidence_ids else str(
             uuid.uuid5(uuid.UUID(ctx.snapshot.snapshot_id), f"measurement:{m.sensor_id}")
         )
@@ -190,7 +235,9 @@ def get_excursion_summary(ctx: ToolContext) -> dict[str, Any]:
 def get_sensor_comparison(ctx: ToolContext) -> dict[str, Any]:
     """Return aligned readings and disagreement evidence between sensors.
 
-    Does NOT interpolate or align readings across gaps > max_gap_seconds.
+    Does NOT interpolate or align readings across gaps exceeding max alignment tolerance.
+    Where observations cannot support comparison, returns insufficient/unaligned evidence
+    rather than a confirmed disagreement. Evidence intervals describe only readings actually used.
     """
     if "sensor_comparison" in ctx._cache:
         return ctx._cache["sensor_comparison"]
@@ -214,6 +261,10 @@ def get_sensor_comparison(ctx: ToolContext) -> dict[str, Any]:
     )
 
     comparisons: list[dict[str, Any]] = []
+    max_alignment_seconds = min(
+        MAX_ALIGNMENT_OFFSET_SECONDS,
+        ctx.snapshot.policy.expected_interval_seconds / 2.0,
+    )
 
     for cmp_sensor in cmp_sensors:
         cmp_readings = sorted(
@@ -250,6 +301,8 @@ def get_sensor_comparison(ctx: ToolContext) -> dict[str, Any]:
                     "reference_sensor_id": ref_sensor.sensor_id,
                     "comparison_sensor_id": cmp_sensor.sensor_id,
                     "aligned_readings": [],
+                    "aligned_count": 0,
+                    "is_truncated": False,
                     "max_difference_c": None,
                     "disagreement_detected": False,
                     "missing_comparison_data": True,
@@ -259,43 +312,51 @@ def get_sensor_comparison(ctx: ToolContext) -> dict[str, Any]:
             )
             continue
 
-        # Align readings without bridging gaps > max_gap_seconds
+        # Align readings strictly within defensible temporal alignment window
         aligned: list[dict[str, Any]] = []
-        max_diff_c = 0.0
-        has_unaligned_gaps = False
+        used_ref_ids: set[str] = set()
+        used_cmp_ids: set[str] = set()
+        has_unaligned = False
 
         for cr in cmp_readings:
-            nearest_ref = min(
-                ref_readings,
-                key=lambda rr: abs((rr.observed_at - cr.observed_at).total_seconds()),
-                default=None,
-            )
-            if nearest_ref is None:
+            candidates = [
+                rr
+                for rr in ref_readings
+                if rr.event_id not in used_ref_ids
+                and abs((rr.observed_at - cr.observed_at).total_seconds()) <= max_alignment_seconds
+            ]
+            if not candidates:
+                has_unaligned = True
                 continue
 
-            gap = abs((nearest_ref.observed_at - cr.observed_at).total_seconds())
-            if gap > ctx.snapshot.policy.max_gap_seconds:
-                has_unaligned_gaps = True
-                continue  # Never align across wide unobserved gaps
-
+            nearest_ref = min(
+                candidates,
+                key=lambda rr: abs((rr.observed_at - cr.observed_at).total_seconds()),
+            )
+            used_ref_ids.add(nearest_ref.event_id)
+            used_cmp_ids.add(cr.event_id)
             diff = round(cr.temperature_c - nearest_ref.temperature_c, 2)
-            max_diff_c = max(max_diff_c, abs(diff))
+            offset = round(abs((nearest_ref.observed_at - cr.observed_at).total_seconds()), 1)
             aligned.append(
                 {
                     "time": cr.observed_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
                     "reference_c": nearest_ref.temperature_c,
                     "comparison_c": cr.temperature_c,
                     "difference_c": diff,
+                    "offset_seconds": offset,
                     "ref_event_id": nearest_ref.event_id,
                     "cmp_event_id": cr.event_id,
                 }
             )
 
+        if len(used_ref_ids) < len(ref_readings):
+            has_unaligned = True
+
         if not aligned:
             summary = (
                 f"Sensor comparison {ref_sensor.sensor_id} vs {cmp_sensor.sensor_id}: "
-                f"no readings could be aligned within max gap "
-                f"{ctx.snapshot.policy.max_gap_seconds}s."
+                f"insufficient aligned data "
+                f"(no readings within {max_alignment_seconds}s tolerance)."
             )
             ref = EvidenceRef(
                 evidence_id=ev_id,
@@ -312,6 +373,8 @@ def get_sensor_comparison(ctx: ToolContext) -> dict[str, Any]:
                     "reference_sensor_id": ref_sensor.sensor_id,
                     "comparison_sensor_id": cmp_sensor.sensor_id,
                     "aligned_readings": [],
+                    "aligned_count": 0,
+                    "is_truncated": False,
                     "max_difference_c": None,
                     "disagreement_detected": False,
                     "missing_comparison_data": True,
@@ -321,16 +384,16 @@ def get_sensor_comparison(ctx: ToolContext) -> dict[str, Any]:
             )
             continue
 
+        max_diff_c = max(abs(a["difference_c"]) for a in aligned)
         disagreement_detected = max_diff_c > DISAGREEMENT_THRESHOLD_C
-        record_ids: list[str] = []
-        for a in aligned:
-            if a["ref_event_id"] not in record_ids:
-                record_ids.append(a["ref_event_id"])
-            if a["cmp_event_id"] not in record_ids:
-                record_ids.append(a["cmp_event_id"])
 
-        sorted_times = sorted([r.observed_at for r in cmp_readings + ref_readings])
-        interval = EvidenceInterval(start_at=sorted_times[0], end_at=sorted_times[-1])
+        # Evidence interval describes ONLY the readings actually used
+        used_readings = [r for r in ref_readings if r.event_id in used_ref_ids] + [
+            r for r in cmp_readings if r.event_id in used_cmp_ids
+        ]
+        sorted_used_times = sorted(r.observed_at for r in used_readings)
+        interval = EvidenceInterval(start_at=sorted_used_times[0], end_at=sorted_used_times[-1])
+        record_ids = sorted(list(used_ref_ids | used_cmp_ids))
 
         summary = (
             f"Sensor comparison {ref_sensor.sensor_id} vs {cmp_sensor.sensor_id}: "
@@ -338,8 +401,8 @@ def get_sensor_comparison(ctx: ToolContext) -> dict[str, Any]:
         )
         if disagreement_detected:
             summary += f" (disagreement exceeds {DISAGREEMENT_THRESHOLD_C}°C threshold)"
-        if has_unaligned_gaps:
-            summary += " (some samples unaligned due to gaps)"
+        if has_unaligned:
+            summary += " (some readings unaligned due to timing offset or gaps)"
         summary += "."
 
         ref = EvidenceRef(
@@ -353,15 +416,30 @@ def get_sensor_comparison(ctx: ToolContext) -> dict[str, Any]:
         )
         ctx.register_evidence(ref)
 
+        # Bound model-facing aligned_readings size while preserving count and max difference
+        is_truncated = len(aligned) > MAX_RETURNED_ALIGNED_READINGS
+        if is_truncated:
+            max_item = max(aligned, key=lambda a: abs(a["difference_c"]))
+            bounded = aligned[:5]
+            if max_item not in bounded and max_item not in aligned[-4:]:
+                bounded.append(max_item)
+                bounded.extend(aligned[-4:])
+            else:
+                bounded.extend(aligned[-5:])
+        else:
+            bounded = aligned
+
         comparisons.append(
             {
                 "reference_sensor_id": ref_sensor.sensor_id,
                 "comparison_sensor_id": cmp_sensor.sensor_id,
-                "aligned_readings": aligned,
+                "aligned_readings": bounded,
+                "aligned_count": len(aligned),
+                "is_truncated": is_truncated,
                 "max_difference_c": round(max_diff_c, 2),
                 "disagreement_detected": disagreement_detected,
                 "missing_comparison_data": False,
-                "unaligned_gaps": has_unaligned_gaps,
+                "unaligned_gaps": has_unaligned,
                 "evidence_id": ev_id,
             }
         )
@@ -380,6 +458,7 @@ def _get_events_by_type(
     """Helper for door/refrigeration/vehicle events.
 
     Explicitly marks missing data rather than hallucinating default states.
+    Bounds returned model-facing events while preserving total count and evidence IDs.
     """
     if cache_key in ctx._cache:
         return ctx._cache[cache_key]
@@ -392,6 +471,7 @@ def _get_events_by_type(
         result = {
             "events": [],
             "count": 0,
+            "is_truncated": False,
             "is_missing": True,
             "status": f"missing_{event_label}_events",
             "summary": f"No {event_label.replace('_', ' ')} events observed in snapshot.",
@@ -425,9 +505,13 @@ def _get_events_by_type(
             }
         )
 
+    bounded_events = result_events[:MAX_RETURNED_EVENTS]
+    is_truncated = len(result_events) > MAX_RETURNED_EVENTS
+
     result = {
-        "events": result_events,
+        "events": bounded_events,
         "count": len(result_events),
+        "is_truncated": is_truncated,
         "is_missing": False,
         "status": "observed",
         "evidence_ids": [ev["evidence_id"] for ev in result_events],
@@ -436,12 +520,245 @@ def _get_events_by_type(
     return result
 
 
-def get_door_events(ctx: ToolContext) -> dict[str, Any]:
-    """Return door timeline around the excursion window.
+def _compute_door_temporal_facts(
+    ctx: ToolContext,
+    door_events: list[Event],
+) -> dict[str, Any] | None:
+    """Compute deterministic temporal facts regarding door opening and temperature excursion.
 
-    Never turns missing door events into 'closed'.
+    Includes door opening before rise, overlap interval, and recovery after close.
+    Describes temporal association without claiming causation.
     """
-    return _get_events_by_type(ctx, EventType.door_state, "door_events", "door")
+    if not door_events:
+        return None
+
+    ref_sensor = next(
+        (s for s in ctx.snapshot.sensors if s.role == SensorRole.reference),
+        None,
+    )
+    if ref_sensor is None:
+        return None
+
+    ref_measurement = next(
+        (m for m in ctx.measurements if m.sensor_id == ref_sensor.sensor_id),
+        None,
+    )
+    if ref_measurement is None:
+        return None
+
+    has_excursion = (
+        ref_measurement.estimated_out_of_range_seconds > 0.0
+        or ref_measurement.first_observed_out_at is not None
+    )
+    if not has_excursion:
+        return {
+            "has_excursion": False,
+            "door_opened_before_rise": False,
+            "lead_time_seconds": None,
+            "overlap_interval": None,
+            "temperature_recovered_after_close": False,
+            "recovery_time_seconds": None,
+            "record_ids": [],
+            "method_version": TOOLS_VERSION,
+            "summary": (
+                "No excursion detected on reference sensor; "
+                "temporal door correlation not applicable."
+            ),
+            "evidence_id": None,
+        }
+
+    # Reference readings
+    ref_readings = [r for r in ctx.snapshot.readings if r.sensor_id == ref_sensor.sensor_id]
+    ref_readings.sort(key=lambda r: (r.observed_at, r.event_id))
+
+    policy = ctx.snapshot.policy
+    out_readings = [
+        r
+        for r in ref_readings
+        if r.temperature_c < policy.min_c or r.temperature_c > policy.max_c
+    ]
+    if not out_readings:
+        t_rise = ref_measurement.first_observed_out_at or ref_readings[0].observed_at
+        first_out_rec_id = None
+        t_fall = ref_measurement.last_observed_out_at or t_rise
+        last_out_rec_id = None
+    else:
+        first_out = out_readings[0]
+        last_out = out_readings[-1]
+        t_rise = first_out.observed_at
+        first_out_rec_id = first_out.event_id
+        t_fall = last_out.observed_at
+        last_out_rec_id = last_out.event_id
+
+    sorted_door_events = sorted(door_events, key=lambda e: (e.observed_at, e.event_id))
+    open_events = [e for e in sorted_door_events if e.value == "open"]
+    close_events = [e for e in sorted_door_events if e.value == "closed"]
+
+    used_record_ids: set[str] = set()
+    used_timestamps: list[datetime] = []
+
+    if first_out_rec_id:
+        used_record_ids.add(first_out_rec_id)
+        used_timestamps.append(t_rise)
+    if last_out_rec_id:
+        used_record_ids.add(last_out_rec_id)
+        used_timestamps.append(t_fall)
+
+    # 1. Door opening before rise
+    prior_open = [e for e in open_events if e.observed_at <= t_rise]
+    if prior_open:
+        open_event = max(prior_open, key=lambda e: e.observed_at)
+        door_opened_before_rise = True
+        lead_time_seconds = round((t_rise - open_event.observed_at).total_seconds(), 1)
+        used_record_ids.add(open_event.event_id)
+        used_timestamps.append(open_event.observed_at)
+    else:
+        door_opened_before_rise = False
+        lead_time_seconds = None
+        open_event = open_events[0] if open_events else None
+        if open_event:
+            used_record_ids.add(open_event.event_id)
+            used_timestamps.append(open_event.observed_at)
+
+    # 2. Overlap interval
+    overlap_interval: dict[str, Any] | None = None
+    close_event: Event | None = None
+    if open_event:
+        subsequent_closes = [e for e in close_events if e.observed_at >= open_event.observed_at]
+        if subsequent_closes:
+            close_event = min(subsequent_closes, key=lambda e: e.observed_at)
+            door_closed_at = close_event.observed_at
+            used_record_ids.add(close_event.event_id)
+            used_timestamps.append(close_event.observed_at)
+        else:
+            door_closed_at = ctx.snapshot.cutoff_at
+
+        overlap_start = max(open_event.observed_at, t_rise)
+        overlap_end = min(door_closed_at, t_fall)
+        if overlap_start <= overlap_end:
+            overlap_duration = round((overlap_end - overlap_start).total_seconds(), 1)
+            overlap_interval = {
+                "start_at": overlap_start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "end_at": overlap_end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "duration_seconds": overlap_duration,
+            }
+            for r in ref_readings:
+                if overlap_start <= r.observed_at <= overlap_end:
+                    used_record_ids.add(r.event_id)
+                    used_timestamps.append(r.observed_at)
+
+    # 3. Recovery after close
+    temperature_recovered_after_close = False
+    recovery_time_seconds: float | None = None
+    if close_event:
+        post_close_readings = [
+            r for r in ref_readings if r.observed_at >= close_event.observed_at
+        ]
+        recovery_reading = next(
+            (r for r in post_close_readings if policy.min_c <= r.temperature_c <= policy.max_c),
+            None,
+        )
+        if recovery_reading:
+            temperature_recovered_after_close = True
+            recovery_time_seconds = round(
+                (recovery_reading.observed_at - close_event.observed_at).total_seconds(), 1
+            )
+            used_record_ids.add(recovery_reading.event_id)
+            used_timestamps.append(recovery_reading.observed_at)
+
+    # Narrative describing temporal association without claiming causation
+    parts: list[str] = []
+    if door_opened_before_rise:
+        parts.append(
+            f"Door open event observed {lead_time_seconds}s prior to "
+            "temperature rise above threshold."
+        )
+    else:
+        parts.append("Door open event was not observed prior to temperature rise.")
+
+    if overlap_interval:
+        parts.append(
+            f"Door-open and excursion overlap duration was {overlap_interval['duration_seconds']}s "
+            f"({overlap_interval['start_at']} to {overlap_interval['end_at']})."
+        )
+    else:
+        parts.append("No overlap observed between open door and excursion window.")
+
+    if temperature_recovered_after_close:
+        parts.append(
+            f"Temperature returned to normal range {recovery_time_seconds}s after door closed."
+        )
+    else:
+        if close_event:
+            parts.append(
+                "Temperature did not recover to normal range after door closed prior to cutoff."
+            )
+        else:
+            parts.append("No door close event observed prior to cutoff.")
+
+    parts.append("Temporal association observed; does not establish causation.")
+    summary = " ".join(parts)
+
+    ev_id = str(uuid.uuid5(uuid.UUID(ctx.snapshot.snapshot_id), "door_temporal_facts"))
+    sorted_times = sorted(used_timestamps)
+    interval = (
+        EvidenceInterval(start_at=sorted_times[0], end_at=sorted_times[-1])
+        if sorted_times
+        else None
+    )
+
+    ref = EvidenceRef(
+        evidence_id=ev_id,
+        snapshot_id=ctx.snapshot.snapshot_id,
+        kind=EvidenceKind.derived_metric,
+        record_ids=sorted(list(used_record_ids)),
+        interval=interval,
+        summary=summary,
+        method_version=TOOLS_VERSION,
+    )
+    ctx.register_evidence(ref)
+
+    return {
+        "has_excursion": True,
+        "door_opened_before_rise": door_opened_before_rise,
+        "lead_time_seconds": lead_time_seconds,
+        "overlap_interval": overlap_interval,
+        "temperature_recovered_after_close": temperature_recovered_after_close,
+        "recovery_time_seconds": recovery_time_seconds,
+        "record_ids": sorted(list(used_record_ids)),
+        "method_version": TOOLS_VERSION,
+        "summary": summary,
+        "evidence_id": ev_id,
+    }
+
+
+def get_door_events(ctx: ToolContext) -> dict[str, Any]:
+    """Return door timeline and deterministic temporal facts around the excursion window.
+
+    Never turns missing door events into 'closed'. Includes deterministic temporal facts
+    (door open before rise, overlap duration, recovery after close) without claiming causation.
+    """
+    if "door_events" in ctx._cache:
+        return ctx._cache["door_events"]
+
+    raw = _get_events_by_type(ctx, EventType.door_state, "door_events_raw", "door")
+    if raw["is_missing"]:
+        raw["temporal_facts"] = None
+        ctx._cache["door_events"] = raw
+        return raw
+
+    door_events_list = [e for e in ctx.snapshot.events if e.event_type == EventType.door_state]
+    temporal_facts = _compute_door_temporal_facts(ctx, door_events_list)
+    raw["temporal_facts"] = temporal_facts
+    if (
+        temporal_facts
+        and temporal_facts.get("evidence_id")
+        and temporal_facts["evidence_id"] not in raw["evidence_ids"]
+    ):
+        raw["evidence_ids"].append(temporal_facts["evidence_id"])
+
+    ctx._cache["door_events"] = raw
+    return raw
 
 
 def get_refrigeration_events(ctx: ToolContext) -> dict[str, Any]:
@@ -500,3 +817,4 @@ def get_handling_policy(ctx: ToolContext) -> dict[str, Any]:
     }
     ctx._cache["handling_policy"] = result
     return result
+

@@ -30,6 +30,7 @@ from coldchain.contracts.schemas import (
     Snapshot,
     Verification,
 )
+from coldchain.core.detector import detect_excursions
 from coldchain.investigation.tools import (
     TOOLS_VERSION,
     ToolContext,
@@ -418,11 +419,21 @@ def test_get_door_events_observed():
     values = [e["value"] for e in res["events"]]
     assert values == ["open", "closed"]
 
-    for ev_id in res["evidence_ids"]:
+    for ev_id in [e["evidence_id"] for e in res["events"]]:
         ev = ctx.get_evidence(ev_id)
         assert ev is not None
         assert ev.kind == EvidenceKind.event
         assert ev.snapshot_id == snap.snapshot_id
+
+    # Verify deterministic temporal facts
+    tf = res.get("temporal_facts")
+    assert tf is not None
+    assert tf["door_opened_before_rise"] is True
+    assert tf["evidence_id"] in res["evidence_ids"]
+    tf_ev = ctx.get_evidence(tf["evidence_id"])
+    assert tf_ev is not None
+    assert tf_ev.kind == EvidenceKind.derived_metric
+    assert "does not establish causation" in tf["summary"]
 
 
 def test_get_door_events_missing_never_assumes_closed():
@@ -615,3 +626,330 @@ def test_integration_with_door_snapshot_and_canonical_report():
     assert report.validate_evidence_provenance() is report
     dumped = report.model_dump(mode="json")
     assert isinstance(dumped, dict)
+
+
+# ── Blocker Regression Tests ────────────────────────────────────────────────
+
+
+def test_fabricated_measurement_rejected():
+    """ToolContext rejects caller measurement conflicting with deterministic detector."""
+    snap = _make_snapshot()
+    real_measurements = detect_excursions(snap, snap.policy)
+    ref_m = next(m for m in real_measurements if m.sensor_id == snap.sensors[0].sensor_id)
+    cmp_m = next(m for m in real_measurements if m.sensor_id == snap.sensors[1].sensor_id)
+
+    # Fabricate 9,999 seconds out of range
+    fabricated_ref = ref_m.model_copy(update={"estimated_out_of_range_seconds": 9999.0})
+    with pytest.raises(ValueError, match="does not match deterministic detector result"):
+        ToolContext(snap, measurements=[fabricated_ref, cmp_m])
+
+
+def test_unknown_sensor_in_measurements_rejected():
+    """ToolContext rejects caller-supplied measurements with unknown sensor IDs cleanly."""
+    snap = _make_snapshot()
+    real_measurements = detect_excursions(snap, snap.policy)
+    ref_m = real_measurements[0]
+    unknown_m = ref_m.model_copy(update={"sensor_id": str(uuid.uuid4())})
+    with pytest.raises(ValueError, match="references unknown sensor"):
+        ToolContext(snap, measurements=[unknown_m, real_measurements[1]])
+
+
+def test_100_second_offset_not_aligned_no_false_disagreement():
+    """100s offset between sensors is not aligned and does not report false disagreement."""
+    ref_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, "sensor.ref"))
+    cmp_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, "sensor.cmp"))
+    sensors = [
+        Sensor(sensor_id=ref_id, placement="center", role=SensorRole.reference),
+        Sensor(sensor_id=cmp_id, placement="door", role=SensorRole.comparison),
+    ]
+    # Ref reading at second 0 (5°C), comparison reading at second 100 (9°C)
+    readings = [
+        Reading(
+            event_id=str(uuid.uuid4()),
+            sensor_id=ref_id,
+            observed_at=_ts(0),
+            temperature_c=5.0,
+        ),
+        Reading(
+            event_id=str(uuid.uuid4()),
+            sensor_id=cmp_id,
+            observed_at=_ts(100),
+            temperature_c=9.0,
+        ),
+    ]
+    snap = _make_snapshot(readings=readings, sensors=sensors, events=[])
+    ctx = ToolContext(snap)
+    res = get_sensor_comparison(ctx)
+
+    assert res["count"] == 1
+    comp = res["comparisons"][0]
+    # Must NOT report 4°C disagreement
+    assert comp["disagreement_detected"] is False
+    assert comp["max_difference_c"] is None
+    assert comp["missing_comparison_data"] is True
+    assert comp["unaligned_gaps"] is True
+    assert comp["aligned_readings"] == []
+    assert comp["aligned_count"] == 0
+
+    ev = ctx.get_evidence(comp["evidence_id"])
+    assert ev is not None
+    assert ev.record_ids == []
+    assert ev.interval is None
+    assert "insufficient aligned data" in ev.summary
+
+
+def test_evidence_interval_uses_only_actually_aligned_readings():
+    """EvidenceInterval and record_ids must describe only readings actually used in alignment."""
+    ref_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, "sensor.ref"))
+    cmp_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, "sensor.cmp"))
+    sensors = [
+        Sensor(sensor_id=ref_id, placement="center", role=SensorRole.reference),
+        Sensor(sensor_id=cmp_id, placement="door", role=SensorRole.comparison),
+    ]
+    r0 = Reading(
+        event_id=str(uuid.uuid4()),
+        sensor_id=ref_id,
+        observed_at=_ts(0),
+        temperature_c=5.0,
+    )
+    r60 = Reading(
+        event_id=str(uuid.uuid4()),
+        sensor_id=ref_id,
+        observed_at=_ts(60),
+        temperature_c=5.0,
+    )
+    c0 = Reading(
+        event_id=str(uuid.uuid4()),
+        sensor_id=cmp_id,
+        observed_at=_ts(0),
+        temperature_c=5.2,
+    )
+    c60 = Reading(
+        event_id=str(uuid.uuid4()),
+        sensor_id=cmp_id,
+        observed_at=_ts(60),
+        temperature_c=5.3,
+    )
+    # Unaligned reading 300s later
+    c300 = Reading(
+        event_id=str(uuid.uuid4()),
+        sensor_id=cmp_id,
+        observed_at=_ts(300),
+        temperature_c=5.0,
+    )
+    snap = _make_snapshot(readings=[r0, r60, c0, c60, c300], sensors=sensors, events=[])
+    ctx = ToolContext(snap)
+    res = get_sensor_comparison(ctx)
+
+    comp = res["comparisons"][0]
+    assert comp["aligned_count"] == 2
+    ev = ctx.get_evidence(comp["evidence_id"])
+    assert ev is not None
+    # Interval must strictly span [0s, 60s], NOT [0s, 300s]
+    assert ev.interval is not None
+    assert ev.interval.start_at == _ts(0)
+    assert ev.interval.end_at == _ts(60)
+    # Record IDs must contain only r0, r60, c0, c60, NOT c300
+    assert set(ev.record_ids) == {r0.event_id, r60.event_id, c0.event_id, c60.event_id}
+    assert c300.event_id not in ev.record_ids
+
+
+def test_output_bounding_aligned_readings():
+    """get_sensor_comparison bounds aligned_readings size while preserving count and evidence."""
+    ref_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, "sensor.ref"))
+    cmp_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, "sensor.cmp"))
+    sensors = [
+        Sensor(sensor_id=ref_id, placement="center", role=SensorRole.reference),
+        Sensor(sensor_id=cmp_id, placement="door", role=SensorRole.comparison),
+    ]
+    # Create 50 aligned readings (every 60s)
+    readings: list[Reading] = []
+    for i in range(50):
+        t = _ts(i * 60)
+        readings.append(
+            Reading(
+                event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, f"r.{i}")),
+                sensor_id=ref_id,
+                observed_at=t,
+                temperature_c=5.0,
+            )
+        )
+        readings.append(
+            Reading(
+                event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, f"c.{i}")),
+                sensor_id=cmp_id,
+                observed_at=t,
+                temperature_c=5.2 if i != 25 else 8.5,
+            )
+        )
+    snap = _make_snapshot(readings=readings, sensors=sensors, events=[], cutoff_seconds=3600)
+    ctx = ToolContext(snap)
+    res = get_sensor_comparison(ctx)
+
+    comp = res["comparisons"][0]
+    assert comp["aligned_count"] == 50
+    assert comp["is_truncated"] is True
+    assert len(comp["aligned_readings"]) <= 10
+    # Max disagreement was preserved in bounded list
+    assert comp["disagreement_detected"] is True
+    assert comp["max_difference_c"] == 3.5
+
+    # Evidence in registry has all 100 reading record IDs
+    ev = ctx.get_evidence(comp["evidence_id"])
+    assert ev is not None
+    assert len(ev.record_ids) == 100
+
+
+def test_output_bounding_events():
+    """_get_events_by_type bounds events size while preserving count and evidence IDs."""
+    events: list[Event] = []
+    for i in range(30):
+        events.append(
+            Event(
+                event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, f"door.{i}")),
+                observed_at=_ts(i * 10),
+                event_type=EventType.door_state,
+                value="open" if i % 2 == 0 else "closed",
+                source="sensor",
+            )
+        )
+    snap = _make_snapshot(events=events, cutoff_seconds=600)
+    ctx = ToolContext(snap)
+    res = get_door_events(ctx)
+
+    assert res["count"] == 30
+    assert res["is_truncated"] is True
+    assert len(res["events"]) <= 10
+    # 30 event evidence IDs + 1 door_temporal_facts evidence ID preserved
+    tf = res.get("temporal_facts")
+    assert tf is not None
+    assert tf["evidence_id"] in res["evidence_ids"]
+    assert len(res["evidence_ids"]) == 31
+
+
+def test_door_temporal_facts_opening_overlap_recovery():
+    """Door temporal facts accurately compute opening before rise, overlap, and recovery."""
+    ref_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, "sensor.ref"))
+    cmp_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, "sensor.cmp"))
+    sensors = [
+        Sensor(sensor_id=ref_id, placement="center", role=SensorRole.reference),
+        Sensor(sensor_id=cmp_id, placement="door", role=SensorRole.comparison),
+    ]
+    # Door opens at 30s, closes at 90s
+    e_open = Event(
+        event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, "door.open")),
+        observed_at=_ts(30),
+        event_type=EventType.door_state,
+        value="open",
+        source="sensor",
+    )
+    e_close = Event(
+        event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, "door.close")),
+        observed_at=_ts(90),
+        event_type=EventType.door_state,
+        value="closed",
+        source="sensor",
+    )
+    # Ref temp: 5°C at 0s, 9°C at 60s (excursion start), 9°C at 90s, 5°C at 120s (recovery)
+    r0 = Reading(
+        event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, "r0")),
+        sensor_id=ref_id,
+        observed_at=_ts(0),
+        temperature_c=5.0,
+    )
+    r60 = Reading(
+        event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, "r60")),
+        sensor_id=ref_id,
+        observed_at=_ts(60),
+        temperature_c=9.0,
+    )
+    r90 = Reading(
+        event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, "r90")),
+        sensor_id=ref_id,
+        observed_at=_ts(90),
+        temperature_c=9.0,
+    )
+    r120 = Reading(
+        event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, "r120")),
+        sensor_id=ref_id,
+        observed_at=_ts(120),
+        temperature_c=5.0,
+    )
+    snap = _make_snapshot(
+        readings=[r0, r60, r90, r120],
+        sensors=sensors,
+        events=[e_open, e_close],
+        cutoff_seconds=300,
+    )
+    ctx = ToolContext(snap)
+    res = get_door_events(ctx)
+
+    tf = res.get("temporal_facts")
+    assert tf is not None
+    assert tf["has_excursion"] is True
+    assert tf["door_opened_before_rise"] is True
+    assert tf["lead_time_seconds"] == 30.0  # 60s rise - 30s open = 30s
+    assert tf["overlap_interval"] is not None
+    assert tf["overlap_interval"]["duration_seconds"] == 30.0  # [60s, 90s]
+    assert tf["temperature_recovered_after_close"] is True
+    assert tf["recovery_time_seconds"] == 30.0  # 120s recovery - 90s close = 30s
+    assert tf["method_version"] == TOOLS_VERSION
+    assert "does not establish causation" in tf["summary"]
+
+    # Verify registered evidence ref
+    ev = ctx.get_evidence(tf["evidence_id"])
+    assert ev is not None
+    assert ev.kind == EvidenceKind.derived_metric
+    assert ev.method_version == TOOLS_VERSION
+    assert e_open.event_id in ev.record_ids
+    assert e_close.event_id in ev.record_ids
+    assert r60.event_id in ev.record_ids
+    assert r120.event_id in ev.record_ids
+
+
+def test_door_temporal_facts_door_opens_after_rise():
+    """Door opening after temperature rise is flagged as not opening before rise."""
+    ref_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, "sensor.ref"))
+    cmp_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, "sensor.cmp"))
+    sensors = [
+        Sensor(sensor_id=ref_id, placement="center", role=SensorRole.reference),
+        Sensor(sensor_id=cmp_id, placement="door", role=SensorRole.comparison),
+    ]
+    # Temperature rises at 30s
+    r0 = Reading(
+        event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, "r0")),
+        sensor_id=ref_id,
+        observed_at=_ts(0),
+        temperature_c=5.0,
+    )
+    r30 = Reading(
+        event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, "r30")),
+        sensor_id=ref_id,
+        observed_at=_ts(30),
+        temperature_c=9.0,
+    )
+    # Door opens at 60s (after rise)
+    e_open = Event(
+        event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, "door.open")),
+        observed_at=_ts(60),
+        event_type=EventType.door_state,
+        value="open",
+        source="sensor",
+    )
+    snap = _make_snapshot(
+        readings=[r0, r30],
+        sensors=sensors,
+        events=[e_open],
+        cutoff_seconds=300,
+    )
+    ctx = ToolContext(snap)
+    res = get_door_events(ctx)
+
+    tf = res.get("temporal_facts")
+    assert tf is not None
+    assert tf["has_excursion"] is True
+    assert tf["door_opened_before_rise"] is False
+    assert tf["lead_time_seconds"] is None
+    assert "Door open event was not observed prior to temperature rise" in tf["summary"]
+    assert "does not establish causation" in tf["summary"]
+
