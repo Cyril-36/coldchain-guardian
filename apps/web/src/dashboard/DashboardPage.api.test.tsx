@@ -13,6 +13,7 @@ vi.mock("../auth/auth", async (importOriginal) => {
     isCognitoConfigured: vi.fn(() => false),
     getCurrentUser: vi.fn(async () => null),
     getStoredAccessToken: vi.fn(async () => null),
+    beginSignIn: vi.fn(async () => {}),
   };
 });
 
@@ -59,6 +60,7 @@ describe("DashboardPage API-backed interactions", () => {
     vi.mocked(authModule.isCognitoConfigured).mockReturnValue(false);
     vi.mocked(authModule.getCurrentUser).mockResolvedValue(null);
     vi.mocked(authModule.getStoredAccessToken).mockResolvedValue(null);
+    vi.mocked(authModule.beginSignIn).mockResolvedValue(undefined as any);
   });
 
   afterEach(() => {
@@ -257,10 +259,13 @@ describe("DashboardPage API-backed interactions", () => {
       </AuthProvider>,
     );
 
-    // Initial state: in progress with API run data
-    expect(await screen.findByText(/Run 00000000-0000-0000-0000-000000001099 is at the/)).toBeInTheDocument();
+    // Running view with loaded snapshot displays chart and in-progress status while report generates
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Temperature telemetry" })).toBeInTheDocument();
+    });
     expect(screen.getByText("Investigation in progress")).toBeInTheDocument();
-    expect(screen.getByText("Detecting")).toBeInTheDocument();
+    expect(screen.getAllByText("Detecting").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/00000000-0000-0000-0000-000000001099/).length).toBeGreaterThan(0);
 
     // Trigger retry/next poll to simulate transition to completed
     const retryBtn = screen.getByRole("button", { name: "Retry" });
@@ -467,5 +472,229 @@ describe("DashboardPage API-backed interactions", () => {
     // Recovers successfully
     expect(await screen.findByText("Temperature exceeded the configured limit")).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("shows operator sign-in prompt with login action and no fixture run ID when signed-out visitor opens private run_id", async () => {
+    window.history.pushState({}, "", "/?run_id=00000000-0000-0000-0000-000000009999");
+    vi.mocked(authModule.isCognitoConfigured).mockReturnValue(true);
+    vi.mocked(authModule.getCurrentUser).mockResolvedValue(null);
+    vi.mocked(authModule.getStoredAccessToken).mockResolvedValue(null);
+
+    render(
+      <AuthProvider>
+        <DashboardPage />
+      </AuthProvider>,
+    );
+
+    // Operator sign-in prompt is displayed
+    expect(await screen.findByRole("heading", { name: "Operator sign-in required" })).toBeInTheDocument();
+    expect(screen.getByText(/This investigation URL is protected/)).toBeInTheDocument();
+
+    // Login action button is available and triggers signIn
+    const signInBtn = screen.getByRole("button", { name: "Sign in with Cognito" });
+    expect(signInBtn).toBeInTheDocument();
+    fireEvent.click(signInBtn);
+    expect(authModule.beginSignIn).toHaveBeenCalled();
+
+    // Must NOT show fixture run ID or "Investigation in progress"
+    expect(screen.queryByText("Investigation in progress")).not.toBeInTheDocument();
+    expect(screen.queryByText(/00000000-0000-0000-0000-000000001042/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/00000000-0000-0000-0000-000000000001/)).not.toBeInTheDocument();
+  });
+
+  it("renders telemetry chart and snapshot metrics during in-progress run once snapshot loads", async () => {
+    window.history.pushState({}, "", "/?run_id=00000000-0000-0000-0000-000000005555");
+    vi.mocked(authModule.isCognitoConfigured).mockReturnValue(true);
+    vi.mocked(authModule.getCurrentUser).mockResolvedValue({
+      access_token: "operator-jwt-token-xyz",
+      expired: false,
+    } as any);
+    vi.mocked(authModule.getStoredAccessToken).mockResolvedValue("operator-jwt-token-xyz");
+
+    const inProgressRun = {
+      ...demoRun,
+      run_id: "00000000-0000-0000-0000-000000005555",
+      status: "running" as const,
+      stage: "detecting" as const,
+      report_id: null,
+      stage_events: [],
+    };
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === `${API_BASE}/v1/runs/00000000-0000-0000-0000-000000005555`) {
+        return new Response(JSON.stringify(inProgressRun), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url === `${API_BASE}/v1/runs/00000000-0000-0000-0000-000000005555/snapshot`) {
+        return new Response(JSON.stringify(demoSnapshot), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url === `${API_BASE}/v1/runs/00000000-0000-0000-0000-000000005555/report`) {
+        return new Response(
+          JSON.stringify({
+            error: { code: "REPORT_NOT_READY", message: "Report not ready", request_id: "req-pending", retryable: false },
+          }),
+          { status: 409, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      throw new Error(`Unexpected request to ${url}`);
+    });
+    globalThis.fetch = fetchMock as any;
+
+    render(
+      <AuthProvider>
+        <DashboardPage />
+      </AuthProvider>,
+    );
+
+    // Telemetry chart is rendered while report is still running
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Temperature telemetry" })).toBeInTheDocument();
+    });
+
+    // Summary displays snapshot observed peak and in-progress detector indicator
+    const summary = screen.getByRole("region", { name: "Investigation summary" });
+    expect(summary).toHaveTextContent("9.4°C");
+    expect(summary).toHaveTextContent("Analyzing…");
+    expect(summary).toHaveTextContent("Detector running");
+    expect(summary).toHaveTextContent("82 SAMPLES");
+
+    // Findings section explains automated analysis is underway
+    expect(screen.getByText("Investigation in progress")).toBeInTheDocument();
+    expect(screen.getByText(/Telemetry snapshot has loaded. Automated excursion detection/)).toBeInTheDocument();
+
+    // Evidence and operator review notes reflect pending state
+    expect(screen.getByText("Evidence citations will appear once analysis completes.")).toBeInTheDocument();
+    expect(screen.getByText("Operator review is enabled once the investigation report is complete.")).toBeInTheDocument();
+  });
+
+  it("selects reference sensor over non-reference sensor and formats sub-minute excursion durations as seconds", async () => {
+    window.history.pushState({}, "", "/?run_id=00000000-0000-0000-0000-000000007777");
+    vi.mocked(authModule.isCognitoConfigured).mockReturnValue(true);
+    vi.mocked(authModule.getCurrentUser).mockResolvedValue({
+      access_token: "operator-jwt-token-xyz",
+      expired: false,
+    } as any);
+    vi.mocked(authModule.getStoredAccessToken).mockResolvedValue("operator-jwt-token-xyz");
+
+    const customReport = {
+      ...demoReport,
+      report_id: "00000000-0000-0000-0000-000000007777",
+      run_id: "00000000-0000-0000-0000-000000007777",
+      snapshot_id: demoSnapshot.snapshot_id,
+      // Comparison sensor (non-reference) measurement is placed first in array
+      measurements: [
+        {
+          ...demoReport.measurements[0],
+          sensor_id: "00000000-0000-0000-0000-000000005002",
+          observed_min_c: 15.0,
+          observed_max_c: 18.5,
+          estimated_out_of_range_seconds: 600,
+        },
+        {
+          ...demoReport.measurements[0],
+          sensor_id: "00000000-0000-0000-0000-000000005001", // Reference sensor
+          observed_min_c: 4.0,
+          observed_max_c: 8.9,
+          estimated_out_of_range_seconds: 30, // 30 seconds! Must not display as "0 min"
+        },
+      ],
+    };
+
+    const completedRun = {
+      ...demoRun,
+      run_id: "00000000-0000-0000-0000-000000007777",
+      snapshot_id: demoSnapshot.snapshot_id,
+      status: "completed" as const,
+      stage: "ready" as const,
+      report_id: customReport.report_id,
+    };
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === `${API_BASE}/v1/runs/00000000-0000-0000-0000-000000007777`) {
+        return new Response(JSON.stringify(completedRun), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url === `${API_BASE}/v1/runs/00000000-0000-0000-0000-000000007777/snapshot`) {
+        return new Response(JSON.stringify(demoSnapshot), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url === `${API_BASE}/v1/runs/00000000-0000-0000-0000-000000007777/report`) {
+        return new Response(JSON.stringify(customReport), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      throw new Error(`Unexpected request to ${url}`);
+    });
+    globalThis.fetch = fetchMock as any;
+
+    render(
+      <AuthProvider>
+        <DashboardPage />
+      </AuthProvider>,
+    );
+
+    const summary = await screen.findByRole("region", { name: "Investigation summary" });
+    // Observed peak uses the reference sensor (8.9°C), NOT the first sensor (18.5°C)
+    expect(summary).toHaveTextContent("8.9°C");
+    expect(summary).not.toHaveTextContent("18.5°C");
+
+    // 30 seconds excursion displays as "30s", NOT "0 min"
+    expect(summary).toHaveTextContent("30s");
+    expect(summary).not.toHaveTextContent("0 min");
+  });
+
+  it("displays honest empty evidence state without fallback to fixture evidence and labels deterministic_only honestly", async () => {
+    window.history.pushState({}, "", "/?run_id=00000000-0000-0000-0000-000000006666");
+    vi.mocked(authModule.isCognitoConfigured).mockReturnValue(true);
+    vi.mocked(authModule.getCurrentUser).mockResolvedValue({
+      access_token: "operator-jwt-token-xyz",
+      expired: false,
+    } as any);
+    vi.mocked(authModule.getStoredAccessToken).mockResolvedValue("operator-jwt-token-xyz");
+
+    const liveReportNoEvidence = {
+      ...demoReport,
+      report_id: "00000000-0000-0000-0000-000000006666",
+      generation_mode: "deterministic_only" as const,
+      evidence: [], // Empty live evidence
+    };
+
+    const completedRun = {
+      ...demoRun,
+      run_id: "00000000-0000-0000-0000-000000006666",
+      status: "completed" as const,
+      stage: "ready" as const,
+      generation_mode: "deterministic_only" as const,
+      report_id: liveReportNoEvidence.report_id,
+    };
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === `${API_BASE}/v1/runs/00000000-0000-0000-0000-000000006666`) {
+        return new Response(JSON.stringify(completedRun), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url === `${API_BASE}/v1/runs/00000000-0000-0000-0000-000000006666/snapshot`) {
+        return new Response(JSON.stringify(demoSnapshot), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url === `${API_BASE}/v1/runs/00000000-0000-0000-0000-000000006666/report`) {
+        return new Response(JSON.stringify(liveReportNoEvidence), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      throw new Error(`Unexpected request to ${url}`);
+    });
+    globalThis.fetch = fetchMock as any;
+
+    render(
+      <AuthProvider>
+        <DashboardPage />
+      </AuthProvider>,
+    );
+
+    // Empty evidence message is shown honestly
+    expect(await screen.findByText("No cited evidence for this report.")).toBeInTheDocument();
+
+    // Must NOT fabricate fixture evidence items
+    expect(screen.queryByText(/Door event/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Door opened/)).not.toBeInTheDocument();
+
+    // Generation mode is labeled "DETERMINISTIC ONLY", not "AI UNAVAILABLE"
+    expect(screen.getByText("DETERMINISTIC ONLY")).toBeInTheDocument();
+    expect(screen.queryByText(/AI UNAVAILABLE/i)).not.toBeInTheDocument();
   });
 });

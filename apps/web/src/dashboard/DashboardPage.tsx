@@ -24,8 +24,13 @@ function formatTime(value: string) {
   return new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" }).format(new Date(value));
 }
 
-function formatDuration(seconds: number | null) {
-  return seconds == null ? "—" : `${Math.floor(seconds / 60)} min`;
+export function formatDuration(seconds: number | null): string {
+  if (seconds == null) return "—";
+  if (seconds === 0) return "0s";
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const mins = Math.floor(seconds / 60);
+  const remSecs = Math.round(seconds % 60);
+  return remSecs > 0 ? `${mins} min ${remSecs}s` : `${mins} min`;
 }
 
 function MetricCard({ label, value, detail, tone }: { label: string; value: string; detail: string; tone: "critical" | "review" | "info" }) {
@@ -86,7 +91,48 @@ export function DashboardPage() {
   const [reviewDecision, setReviewDecision] = useState<ReviewDecision | null>(null);
   const [fixtureReview, setFixtureReview] = useState<Review | null>(null);
 
-  if (live.source === "api" && (!live.snapshotReady || !live.reportReady)) {
+  if (live.protectedRun && auth.loading) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-50 px-6 text-slate-950">
+        <section className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+          <p className="text-xs font-semibold uppercase tracking-wide text-cyan-700">ColdChain Guardian</p>
+          <h1 className="mt-3 text-xl font-semibold">Checking operator session</h1>
+          <p className="mt-2 text-sm text-slate-500">Completing secure sign-in…</p>
+        </section>
+      </main>
+    );
+  }
+
+  if (live.protectedRun && !auth.authenticated) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-50 px-6 text-slate-950">
+        <section className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-8 shadow-sm">
+          <p className="text-xs font-semibold uppercase tracking-wide text-cyan-700">ColdChain Guardian</p>
+          <h1 className="mt-3 text-2xl font-semibold">Operator sign-in required</h1>
+          <p className="mt-2 text-sm leading-6 text-slate-600">
+            This investigation URL is protected. Sign in with the configured Cognito operator account to view the run and its evidence.
+          </p>
+          {auth.error && (
+            <div role="alert" className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-800">
+              {auth.error.message}
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={() => void auth.signIn()}
+            className="mt-6 w-full rounded-md bg-[#123B5D] px-4 py-3 text-sm font-semibold text-white hover:bg-[#0F304C]"
+          >
+            Sign in with Cognito
+          </button>
+          <p className="mt-4 text-center text-[11px] text-slate-400">
+            Public demo mode does not require an operator session.
+          </p>
+        </section>
+      </main>
+    );
+  }
+
+  if (live.source === "api" && !live.snapshotReady) {
     return (
       <main className="min-h-screen bg-slate-50 text-slate-950">
         <div className="mx-auto max-w-[900px] p-5 lg:p-10">
@@ -115,11 +161,19 @@ export function DashboardPage() {
   const run = live.source === "api" ? live.run : (live.run ?? demoRun);
   const snapshot = live.source === "api" ? live.snapshot : (live.snapshot ?? demoSnapshot);
   const report = live.source === "api" ? live.report : (live.report ?? demoReport);
-  const primaryMeasurement = report.measurements[0];
+  const referenceSensor = snapshot.sensors.find((sensor) => sensor.role === "reference");
+  const primaryMeasurement = report.measurements.find((m) => m.sensor_id === referenceSensor?.sensor_id) ?? report.measurements[0];
+  const refReadings = snapshot.readings.filter((r) => r.sensor_id === referenceSensor?.sensor_id);
+  const snapshotPeakC = refReadings.length > 0
+    ? Math.max(...refReadings.map((r) => r.temperature_c))
+    : (snapshot.readings.length > 0 ? Math.max(...snapshot.readings.map((r) => r.temperature_c)) : null);
+  const observedPeak = primaryMeasurement?.observed_max_c ?? snapshotPeakC;
   const copy = outcomeCopy(report);
   const finding = report.hypotheses.find((item) => item.hypothesis === report.primary_hypothesis);
   const unresolvedFinding = report.hypotheses.find((item) => item.assessment === "insufficient");
-  const evidence = report.evidence.length > 0 ? report.evidence : fixtureEvidence(snapshot);
+  const evidence = live.source === "api"
+    ? report.evidence
+    : (report.evidence.length > 0 ? report.evidence : fixtureEvidence(snapshot));
   const isPublicDemo = live.source === "api" && !live.protectedRun;
   const isProtectedRun = live.source === "api" && live.protectedRun;
   const isReportReady = live.source === "api"
@@ -233,7 +287,8 @@ export function DashboardPage() {
           <button
             type="button"
             onClick={() => window.print()}
-            className="rounded-md border border-slate-200 bg-white px-4 py-2.5 text-xs font-semibold text-[#123B5D]"
+            disabled={!isReportReady}
+            className="rounded-md border border-slate-200 bg-white px-4 py-2.5 text-xs font-semibold text-[#123B5D] disabled:opacity-50"
             aria-label="Print investigation report"
           >
             Print report
@@ -245,10 +300,10 @@ export function DashboardPage() {
           <span className="text-slate-600">Policy {snapshot.policy.policy_id}-{snapshot.policy.policy_version} · {snapshot.policy.min_c}°C–{snapshot.policy.max_c}°C</span>
           <span className="text-slate-400">Cutoff {new Date(snapshot.cutoff_at).toLocaleDateString("en-GB")} · {formatTime(snapshot.cutoff_at)} UTC</span>
           <span className="rounded px-2 py-1 font-semibold text-amber-700 bg-amber-50">SIMULATED</span>
-          {report.generation_mode === "deterministic_only" && (
-            <span className="rounded px-2 py-1 font-semibold text-sky-800 bg-sky-50">DETERMINISTIC ONLY · AI UNAVAILABLE</span>
+          {isReportReady && report.generation_mode === "deterministic_only" && (
+            <span className="rounded px-2 py-1 font-semibold text-sky-800 bg-sky-50">DETERMINISTIC ONLY</span>
           )}
-          {report.generation_mode === "bedrock" && (
+          {isReportReady && report.generation_mode === "bedrock" && (
             <span className="rounded px-2 py-1 font-semibold text-purple-800 bg-purple-50">BEDROCK AGENT</span>
           )}
         </div>
@@ -257,33 +312,35 @@ export function DashboardPage() {
           <section aria-label="Investigation summary" className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <MetricCard
               label="Observed peak"
-              value={primaryMeasurement?.observed_max_c == null ? "—" : `${primaryMeasurement.observed_max_c}°C`}
-              detail={primaryMeasurement?.observed_max_c != null && primaryMeasurement.observed_max_c > snapshot.policy.max_c ? "Above configured limit" : "Within configured limit"}
-              tone={primaryMeasurement?.observed_max_c != null && primaryMeasurement.observed_max_c > snapshot.policy.max_c ? "critical" : "info"}
+              value={observedPeak == null ? "—" : `${observedPeak}°C`}
+              detail={observedPeak != null && observedPeak > snapshot.policy.max_c ? "Above configured limit" : "Within configured limit"}
+              tone={observedPeak != null && observedPeak > snapshot.policy.max_c ? "critical" : "info"}
             />
             <MetricCard
               label="Estimated time out of range"
-              value={formatDuration(primaryMeasurement?.estimated_out_of_range_seconds ?? null)}
+              value={isReportReady ? formatDuration(primaryMeasurement?.estimated_out_of_range_seconds ?? null) : "Analyzing…"}
               detail={
-                primaryMeasurement?.censored_start || primaryMeasurement?.censored_end
+                !isReportReady
+                  ? "Detector running"
+                  : primaryMeasurement?.censored_start || primaryMeasurement?.censored_end
                   ? "Incomplete exposure · boundary censored"
                   : primaryMeasurement?.coverage_status === "partial"
                   ? "Qualified estimate · partial coverage"
                   : "Backend measurement"
               }
-              tone={primaryMeasurement?.censored_start || primaryMeasurement?.censored_end ? "critical" : "review"}
+              tone={!isReportReady ? "info" : (primaryMeasurement?.censored_start || primaryMeasurement?.censored_end ? "critical" : "review")}
             />
             <MetricCard
               label="Data coverage"
-              value={primaryMeasurement?.coverage_status ? primaryMeasurement.coverage_status.toUpperCase() : "—"}
-              detail={primaryMeasurement?.unknown_duration_seconds ? `${formatDuration(primaryMeasurement.unknown_duration_seconds)} unknown duration` : "Full coverage observed"}
-              tone={primaryMeasurement?.coverage_status === "insufficient" ? "critical" : primaryMeasurement?.coverage_status === "partial" ? "review" : "info"}
+              value={isReportReady ? (primaryMeasurement?.coverage_status ? primaryMeasurement.coverage_status.toUpperCase() : "—") : (snapshot.readings.length > 0 ? `${snapshot.readings.length} SAMPLES` : "—")}
+              detail={!isReportReady ? "Telemetry loaded · analysis in progress" : (primaryMeasurement?.unknown_duration_seconds ? `${formatDuration(primaryMeasurement.unknown_duration_seconds)} unknown duration` : "Full coverage observed")}
+              tone={!isReportReady ? "info" : (primaryMeasurement?.coverage_status === "insufficient" ? "critical" : primaryMeasurement?.coverage_status === "partial" ? "review" : "info")}
             />
             <MetricCard
               label="Review status"
-              value={currentReview ? `Reviewed · ${currentReview.decision.replace("_", " ")}` : report.review_required ? "Needs review" : "No review required"}
-              detail={verificationCopy}
-              tone={report.review_required && !currentReview ? "review" : "info"}
+              value={!isReportReady ? "In progress" : (currentReview ? `Reviewed · ${currentReview.decision.replace("_", " ")}` : report.review_required ? "Needs review" : "No review required")}
+              detail={!isReportReady ? (stageLabels[run.stage] ?? run.stage) : verificationCopy}
+              tone={!isReportReady ? "info" : (report.review_required && !currentReview ? "review" : "info")}
             />
           </section>
 
@@ -310,41 +367,71 @@ export function DashboardPage() {
             </article>
 
             <article className="rounded-[10px] border border-slate-200 bg-white p-5 shadow-sm">
-              <h2 className="text-lg font-semibold">Main finding</h2>
-              <p className="mt-4 text-sm font-semibold text-red-700">{copy.title}</p>
-              <p className="mt-2 text-xs leading-5 text-slate-600">{copy.detail}</p>
-              {report.outcome === "unresolved" && (
-                <div role="alert" className="mt-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
-                  <p className="font-semibold">⚠️ Prominent Uncertainty</p>
-                  <p className="mt-1">Available evidence cannot confirm a primary cause. Do not release shipment based on incomplete evidence.</p>
-                  {unresolvedFinding?.missing_evidence?.length ? (
-                    <div className="mt-2">
-                      <p className="font-semibold text-[11px] text-amber-800">Missing evidence:</p>
-                      <ul className="mt-1 list-disc pl-4 space-y-1 text-[11px]">
-                        {unresolvedFinding.missing_evidence.map((item, idx) => (
-                          <li key={idx}>{item}</li>
+              <h2 className="text-lg font-semibold">
+                {!isReportReady ? "Investigation in progress" : "Main finding"}
+              </h2>
+              {!isReportReady ? (
+                <div className="mt-4">
+                  <div className="flex items-center gap-2">
+                    <span className="rounded bg-cyan-50 px-2 py-0.5 text-xs font-semibold text-cyan-800">
+                      {stageLabels[run.stage] ?? run.stage}
+                    </span>
+                    <span className="text-xs text-slate-500">Run {run.run_id}</span>
+                  </div>
+                  <p className="mt-2 text-xs leading-5 text-slate-600">
+                    Run {run.run_id} is at the <span className="font-semibold">{stageLabels[run.stage] ?? run.stage}</span> stage. Telemetry snapshot has loaded. Automated excursion detection and hypothesis evaluation are underway.
+                  </p>
+                  <div className="mt-4 flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={live.retry}
+                      className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-[#123B5D] hover:bg-slate-100"
+                    >
+                      Retry
+                    </button>
+                    <span className="text-[11px] text-slate-400">Polling automatically every few seconds</span>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <p className={`mt-4 text-sm font-semibold ${report.outcome === "no_excursion" ? "text-green-700" : report.outcome === "unresolved" ? "text-amber-700" : "text-red-700"}`}>
+                    {copy.title}
+                  </p>
+                  <p className="mt-2 text-xs leading-5 text-slate-600">{copy.detail}</p>
+                  {report.outcome === "unresolved" && (
+                    <div role="alert" className="mt-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+                      <p className="font-semibold">⚠️ Prominent Uncertainty</p>
+                      <p className="mt-1">Available evidence cannot confirm a primary cause. Do not release shipment based on incomplete evidence.</p>
+                      {unresolvedFinding?.missing_evidence?.length ? (
+                        <div className="mt-2">
+                          <p className="font-semibold text-[11px] text-amber-800">Missing evidence:</p>
+                          <ul className="mt-1 list-disc pl-4 space-y-1 text-[11px]">
+                            {unresolvedFinding.missing_evidence.map((item, idx) => (
+                              <li key={idx}>{item}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
+                  {report.outcome === "no_excursion" && (
+                    <p className="mt-2 text-[11px] text-slate-500">
+                      Normal readings do not certify product viability or shipment release.
+                    </p>
+                  )}
+                  {finding && report.outcome !== "unresolved" && (
+                    <p className="mt-2 text-[11px] text-amber-700">Evidence supports the hypothesis but does not establish disposition.</p>
+                  )}
+                  {report.next_checks.length > 0 && (
+                    <>
+                      <h3 className="mt-4 text-xs font-semibold text-slate-600">Next checks</h3>
+                      <ul className="mt-2 space-y-2 text-xs">
+                        {report.next_checks.map((check) => (
+                          <li key={check.code}>• {check.reason}</li>
                         ))}
                       </ul>
-                    </div>
-                  ) : null}
-                </div>
-              )}
-              {report.outcome === "no_excursion" && (
-                <p className="mt-2 text-[11px] text-slate-500">
-                  Normal readings do not certify product viability or shipment release.
-                </p>
-              )}
-              {finding && report.outcome !== "unresolved" && (
-                <p className="mt-2 text-[11px] text-amber-700">Evidence supports the hypothesis but does not establish disposition.</p>
-              )}
-              {report.next_checks.length > 0 && (
-                <>
-                  <h3 className="mt-4 text-xs font-semibold text-slate-600">Next checks</h3>
-                  <ul className="mt-2 space-y-2 text-xs">
-                    {report.next_checks.map((check) => (
-                      <li key={check.code}>• {check.reason}</li>
-                    ))}
-                  </ul>
+                    </>
+                  )}
                 </>
               )}
             </article>
@@ -352,22 +439,28 @@ export function DashboardPage() {
             <article className="rounded-[10px] border border-slate-200 bg-white p-5 shadow-sm">
               <h2 className="text-lg font-semibold">Supporting &amp; conflicting evidence</h2>
               <div className="mt-4 space-y-2">
-                {evidence.map((item) => {
-                  const ids = "evidence_id" in item ? item.record_ids : item.recordIds;
-                  const active = ids.some((id) => selectedRecordIds.has(id));
-                  const title = "evidence_id" in item ? item.summary : item.title;
-                  return (
-                    <button
-                      key={"evidence_id" in item ? item.evidence_id : item.key}
-                      type="button"
-                      aria-pressed={active}
-                      onClick={() => setSelectedRecordIds(active ? new Set() : new Set(ids))}
-                      className={`w-full rounded-md p-3 text-left transition ${active ? "bg-amber-50 ring-1 ring-amber-300" : "bg-slate-50 hover:bg-slate-100"}`}
-                    >
-                      <p className="text-[11px] font-semibold">{title}</p>
-                    </button>
-                  );
-                })}
+                {!isReportReady ? (
+                  <p className="text-xs text-slate-500">Evidence citations will appear once analysis completes.</p>
+                ) : evidence.length === 0 ? (
+                  <p className="text-xs text-slate-500">No cited evidence for this report.</p>
+                ) : (
+                  evidence.map((item) => {
+                    const ids = "evidence_id" in item ? item.record_ids : item.recordIds;
+                    const active = ids.some((id) => selectedRecordIds.has(id));
+                    const title = "evidence_id" in item ? item.summary : item.title;
+                    return (
+                      <button
+                        key={"evidence_id" in item ? item.evidence_id : item.key}
+                        type="button"
+                        aria-pressed={active}
+                        onClick={() => setSelectedRecordIds(active ? new Set() : new Set(ids))}
+                        className={`w-full rounded-md p-3 text-left transition ${active ? "bg-amber-50 ring-1 ring-amber-300" : "bg-slate-50 hover:bg-slate-100"}`}
+                      >
+                        <p className="text-[11px] font-semibold">{title}</p>
+                      </button>
+                    );
+                  })
+                )}
               </div>
             </article>
           </section>
@@ -378,49 +471,57 @@ export function DashboardPage() {
               <p className="mt-1 text-[11px] text-slate-500">
                 Review acknowledgement records operator review only and does not constitute shipment release or professional QA approval.
               </p>
-              {reviewDecision && <p role="status" className="mt-2 text-[11px] text-green-700">Review saved.</p>}
-              {currentReview ? (
-                <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs">
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold text-slate-950">Recorded Review · {currentReview.decision.replace("_", " ")}</span>
-                    <span className="text-[11px] text-slate-500">{new Date(currentReview.reviewed_at).toUTCString()}</span>
-                  </div>
-                  <p className="mt-1 text-slate-600">
-                    <strong>Reviewer Identity:</strong> <span data-testid="reviewer-identity">{currentReview.actor_sub}</span>
-                  </p>
-                  {currentReview.note && <p className="mt-1 text-slate-700 italic">"{currentReview.note}"</p>}
-                </div>
+              {!isReportReady ? (
+                <p className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
+                  Operator review is enabled once the investigation report is complete.
+                </p>
               ) : (
                 <>
-                  <div className="mt-3 flex gap-2">
-                    <button
-                      type="button"
-                      disabled={(!isProtectedRun && live.source !== "fixture") || !reviewNote.trim() || actions.reviewSubmitting}
-                      onClick={() => void handleReview("acknowledged")}
-                      className="rounded-md bg-[#123B5D] px-3 py-2 text-[11px] font-semibold text-white disabled:opacity-50"
-                    >
-                      Acknowledge review
-                    </button>
-                    <button
-                      type="button"
-                      disabled={(!isProtectedRun && live.source !== "fixture") || !reviewNote.trim() || actions.reviewSubmitting}
-                      onClick={() => void handleReview("request_more_evidence")}
-                      className="rounded-md border border-slate-200 px-3 py-2 text-[11px] font-semibold text-[#123B5D] disabled:opacity-50"
-                    >
-                      Request evidence
-                    </button>
-                  </div>
-                  <textarea
-                    value={reviewNote}
-                    onChange={(event) => setReviewNote(event.target.value)}
-                    maxLength={1000}
-                    placeholder="Add review note…"
-                    aria-label="Review note"
-                    className="mt-3 h-14 w-full rounded-md border border-slate-200 bg-slate-50 p-3 text-xs"
-                  />
-                  <p className="mt-1 text-right text-[10px] text-slate-400" aria-live="polite">
-                    {reviewNote.length}/1000
-                  </p>
+                  {reviewDecision && <p role="status" className="mt-2 text-[11px] text-green-700">Review saved.</p>}
+                  {currentReview ? (
+                    <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold text-slate-950">Recorded Review · {currentReview.decision.replace("_", " ")}</span>
+                        <span className="text-[11px] text-slate-500">{new Date(currentReview.reviewed_at).toUTCString()}</span>
+                      </div>
+                      <p className="mt-1 text-slate-600">
+                        <strong>Reviewer Identity:</strong> <span data-testid="reviewer-identity">{currentReview.actor_sub}</span>
+                      </p>
+                      {currentReview.note && <p className="mt-1 text-slate-700 italic">"{currentReview.note}"</p>}
+                    </div>
+                  ) : (
+                    <>
+                      <div className="mt-3 flex gap-2">
+                        <button
+                          type="button"
+                          disabled={(!isProtectedRun && live.source !== "fixture") || !reviewNote.trim() || actions.reviewSubmitting}
+                          onClick={() => void handleReview("acknowledged")}
+                          className="rounded-md bg-[#123B5D] px-3 py-2 text-[11px] font-semibold text-white disabled:opacity-50"
+                        >
+                          Acknowledge review
+                        </button>
+                        <button
+                          type="button"
+                          disabled={(!isProtectedRun && live.source !== "fixture") || !reviewNote.trim() || actions.reviewSubmitting}
+                          onClick={() => void handleReview("request_more_evidence")}
+                          className="rounded-md border border-slate-200 px-3 py-2 text-[11px] font-semibold text-[#123B5D] disabled:opacity-50"
+                        >
+                          Request evidence
+                        </button>
+                      </div>
+                      <textarea
+                        value={reviewNote}
+                        onChange={(event) => setReviewNote(event.target.value)}
+                        maxLength={1000}
+                        placeholder="Add review note…"
+                        aria-label="Review note"
+                        className="mt-3 h-14 w-full rounded-md border border-slate-200 bg-slate-50 p-3 text-xs"
+                      />
+                      <p className="mt-1 text-right text-[10px] text-slate-400" aria-live="polite">
+                        {reviewNote.length}/1000
+                      </p>
+                    </>
+                  )}
                 </>
               )}
             </article>
@@ -428,9 +529,9 @@ export function DashboardPage() {
             <article className="rounded-[10px] border border-slate-200 bg-white p-5 shadow-sm">
               <div className="flex items-center justify-between">
                 <div>
-                  <h2 className="text-base font-semibold">Report ready</h2>
-                  <p className={`text-[10px] ${report.verification.status === "passed" ? "text-green-700" : "text-amber-700"}`}>
-                    {verificationCopy}
+                  <h2 className="text-base font-semibold">{isReportReady ? "Report ready" : "Report pending"}</h2>
+                  <p className={`text-[10px] ${!isReportReady ? "text-slate-500" : (report.verification.status === "passed" ? "text-green-700" : "text-amber-700")}`}>
+                    {!isReportReady ? "Awaiting report generation" : verificationCopy}
                   </p>
                 </div>
                 <button

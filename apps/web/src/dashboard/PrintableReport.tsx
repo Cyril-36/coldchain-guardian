@@ -4,11 +4,20 @@ function utc(value: string | null | undefined) {
   if (!value) return "—";
   return new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }).format(new Date(value)) + " UTC";
 }
-function duration(seconds: number | null | undefined) { return seconds == null ? "—" : `${Math.floor(seconds / 60)} min`; }
+function duration(seconds: number | null | undefined) {
+  if (seconds == null) return "—";
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remSeconds = Math.round(seconds % 60);
+  return remSeconds === 0 ? `${minutes} min` : `${minutes} min ${remSeconds}s`;
+}
 export function resolveReview(runReview: Review | null, reviewOverride?: Review | null) { return reviewOverride ?? runReview; }
 
 export function PrintableReport({ run, snapshot, report, reviewOverride }: { run: Run; snapshot: Snapshot; report: Report; reviewOverride?: Review | null }) {
-  const measurement = report.measurements[0];
+  const referenceSensor = snapshot.sensors.find((sensor) => sensor.role === "reference");
+  const measurement =
+    report.measurements.find((m) => m.sensor_id === referenceSensor?.sensor_id) ??
+    report.measurements[0];
   const primary = report.hypotheses.find((item) => item.hypothesis === report.primary_hypothesis);
   const review = resolveReview(run.review, reviewOverride);
   return <section className="print-report" aria-labelledby="print-report-title">

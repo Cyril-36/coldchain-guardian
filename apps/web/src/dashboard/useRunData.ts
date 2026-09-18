@@ -40,18 +40,19 @@ export function useRunData(): RunData {
   const [retryNonce, setRetryNonce] = useState(0);
   const retry = () => setRetryNonce((value) => value + 1);
 
+  const initialRunId = getRunIdFromUrl();
   const initialCaseId = getCaseIdFromUrl() ?? "door";
   const initialFixture = mockCases[initialCaseId] ?? mockCases.door;
 
   const [data, setData] = useState<RunData>({
-    run: initialFixture.run,
+    run: initialRunId ? { ...initialFixture.run, run_id: initialRunId } : initialFixture.run,
     snapshot: initialFixture.snapshot,
     report: initialFixture.report,
-    source: "fixture",
-    protectedRun: false,
-    snapshotReady: true,
-    reportReady: true,
-    loading: false,
+    source: initialRunId ? "api" : "fixture",
+    protectedRun: Boolean(initialRunId),
+    snapshotReady: !initialRunId,
+    reportReady: !initialRunId,
+    loading: Boolean(initialRunId),
     error: null,
     retry,
     demoRuns: fixtureDemoSummaries,
