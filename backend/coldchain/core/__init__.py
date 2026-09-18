@@ -9,6 +9,8 @@ from coldchain.core.detector import (
     detect_excursions,
     detect_excursions_with_evidence,
     is_excursion_detected,
+    is_out_of_range,
+    segment_excursion_intervals,
     validate_snapshot,
 )
 
@@ -21,5 +23,7 @@ __all__ = [
     "detect_excursions",
     "detect_excursions_with_evidence",
     "is_excursion_detected",
+    "is_out_of_range",
+    "segment_excursion_intervals",
     "validate_snapshot",
 ]

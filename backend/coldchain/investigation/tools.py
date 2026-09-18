@@ -12,8 +12,10 @@ from datetime import datetime
 from typing import Any
 
 from coldchain.contracts.enums import (
+    DoorState,
     EventType,
     EvidenceKind,
+    RefrigerationState,
     SensorRole,
 )
 from coldchain.contracts.schemas import (
@@ -26,19 +28,65 @@ from coldchain.contracts.schemas import (
     Snapshot,
 )
 from coldchain.core.detector import (
-    _out_of_range,
-    _segment_excursion_intervals,
     build_measurement_evidence,
     detect_excursions,
+    is_excursion_detected,
+    is_out_of_range,
+    segment_excursion_intervals,
     validate_snapshot,
 )
 
 TOOLS_VERSION = "1.0.0"
 
 DISAGREEMENT_THRESHOLD_C = 1.5
+
+# Measurement fields that a caller-supplied SensorMeasurement must match exactly.
+_VERIFIED_MEASUREMENT_FIELDS = (
+    "estimated_out_of_range_seconds",
+    "unknown_duration_seconds",
+    "observed_min_c",
+    "observed_max_c",
+    "censored_start",
+    "censored_end",
+    "coverage_status",
+    "sample_count",
+    "first_observed_out_at",
+    "last_observed_out_at",
+)
 MAX_ALIGNMENT_OFFSET_SECONDS = 30.0
 MAX_RETURNED_ALIGNED_READINGS = 10
 MAX_RETURNED_EVENTS = 10
+
+# Durations are reported to one decimal place (CONTRACTS.md), so derived instants are
+# rendered on the same 0.1s grid. Truncating an interpolated crossing to a whole second
+# instead would make a rendered interval disagree with the duration printed beside it.
+_RENDER_DECIMALS = 1
+
+
+def _iso_z(dt: datetime) -> str:
+    """Format an aware UTC datetime as ISO 8601 with a ``Z`` suffix.
+
+    Matches the contract serializer in ``coldchain.contracts.schemas``, and keeps
+    millisecond precision for instants that are not whole seconds.
+    """
+    if dt.microsecond:
+        return dt.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    return dt.isoformat().replace("+00:00", "Z")
+
+
+def _instant(ts: float, tz: Any) -> datetime:
+    """Convert POSIX seconds to an aware datetime on the reporting grid.
+
+    Interpolated threshold crossings are floating point. Snapping them to the same
+    0.1s granularity used for durations means a rendered interval subtracts exactly
+    to its own ``duration_seconds``.
+    """
+    return datetime.fromtimestamp(round(ts, _RENDER_DECIMALS), tz=tz)
+
+
+def _elapsed_seconds(start: datetime, end: datetime) -> float:
+    """Seconds between two instants, at the contract's one-decimal precision."""
+    return round((end - start).total_seconds(), _RENDER_DECIMALS)
 
 
 class ToolContext:
@@ -98,27 +146,20 @@ class ToolContext:
                 )
             for m in measurements:
                 exp = expected_by_sensor[m.sensor_id]
-                if (
-                    m.estimated_out_of_range_seconds != exp.estimated_out_of_range_seconds
-                    or m.unknown_duration_seconds != exp.unknown_duration_seconds
-                    or m.observed_min_c != exp.observed_min_c
-                    or m.observed_max_c != exp.observed_max_c
-                    or m.censored_start != exp.censored_start
-                    or m.censored_end != exp.censored_end
-                    or m.coverage_status != exp.coverage_status
-                    or m.sample_count != exp.sample_count
-                    or m.first_observed_out_at != exp.first_observed_out_at
-                    or m.last_observed_out_at != exp.last_observed_out_at
-                ):
+                differing = [
+                    f"{field}={getattr(m, field)!r} (expected {getattr(exp, field)!r})"
+                    for field in _VERIFIED_MEASUREMENT_FIELDS
+                    if getattr(m, field) != getattr(exp, field)
+                ]
+                if differing:
                     raise ValueError(
                         f"Supplied measurement for sensor {m.sensor_id} does not match "
-                        f"deterministic detector result: "
-                        f"estimated_out_of_range_seconds={m.estimated_out_of_range_seconds} "
-                        f"(expected {exp.estimated_out_of_range_seconds})."
+                        f"deterministic detector result: " + ", ".join(differing) + "."
                     )
-            self.measurements = list(expected_measurements)
-        else:
-            self.measurements = list(expected_measurements)
+
+        # Measurements always come from the deterministic detector, never from the
+        # caller. Supplied values are only ever used to fail fast on a mismatch.
+        self.measurements = list(expected_measurements)
 
         self._valid_record_ids: set[str] = {
             r.event_id for r in clean.readings
@@ -202,9 +243,7 @@ def get_excursion_summary(ctx: ToolContext) -> dict[str, Any]:
                 "sensor_id": m.sensor_id,
                 "role": role_str,
                 "placement": placement_str,
-                "excursion_detected": (
-                    m.estimated_out_of_range_seconds > 0.0 or m.first_observed_out_at is not None
-                ),
+                "excursion_detected": is_excursion_detected(m),
                 "estimated_out_of_range_seconds": m.estimated_out_of_range_seconds,
                 "unknown_duration_seconds": m.unknown_duration_seconds,
                 "observed_min_c": m.observed_min_c,
@@ -214,12 +253,12 @@ def get_excursion_summary(ctx: ToolContext) -> dict[str, Any]:
                 "coverage_status": m.coverage_status.value,
                 "sample_count": m.sample_count,
                 "first_observed_out_at": (
-                    m.first_observed_out_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+                    _iso_z(m.first_observed_out_at)
                     if m.first_observed_out_at
                     else None
                 ),
                 "last_observed_out_at": (
-                    m.last_observed_out_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+                    _iso_z(m.last_observed_out_at)
                     if m.last_observed_out_at
                     else None
                 ),
@@ -344,7 +383,7 @@ def get_sensor_comparison(ctx: ToolContext) -> dict[str, Any]:
             offset = round(abs((nearest_ref.observed_at - cr.observed_at).total_seconds()), 1)
             aligned.append(
                 {
-                    "time": cr.observed_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "time": _iso_z(cr.observed_at),
                     "reference_c": nearest_ref.temperature_c,
                     "comparison_c": cr.temperature_c,
                     "difference_c": diff,
@@ -490,7 +529,7 @@ def _get_events_by_type(
         ev_id = str(
             uuid.uuid5(uuid.UUID(ctx.snapshot.snapshot_id), f"event:{e.event_id}")
         )
-        time_str = e.observed_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+        time_str = _iso_z(e.observed_at)
         ref = EvidenceRef(
             evidence_id=ev_id,
             snapshot_id=ctx.snapshot.snapshot_id,
@@ -503,7 +542,7 @@ def _get_events_by_type(
         result_events.append(
             {
                 "event_id": e.event_id,
-                "observed_at": e.observed_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "observed_at": _iso_z(e.observed_at),
                 "value": e.value,
                 "source": e.source,
                 "evidence_id": ev_id,
@@ -549,7 +588,7 @@ def _get_valid_excursion_intervals(
             # Unobserved data gap: do not interpolate across unobserved intervals
             continue
 
-        seg_intervals = _segment_excursion_intervals(
+        seg_intervals = segment_excursion_intervals(
             t1, r1.temperature_c, t2, r2.temperature_c, policy.min_c, policy.max_c
         )
         raw_intervals.extend(seg_intervals)
@@ -572,14 +611,89 @@ def _get_valid_excursion_intervals(
     return merged
 
 
+def _covered_spans(
+    readings: list[Reading],
+    policy: Policy,
+) -> list[tuple[float, float]]:
+    """Return maximal time spans over which a sensor's coverage is continuous.
+
+    Two consecutive readings separated by at most ``policy.max_gap_seconds`` are
+    treated as continuously covered; a wider separation ends the span and starts a
+    new one. Time outside these spans is unobserved: nothing about the temperature
+    path there can be established, in either direction.
+    """
+    if len(readings) < 2:
+        return []
+
+    spans: list[tuple[float, float]] = []
+    span_start = readings[0].observed_at.timestamp()
+    previous = span_start
+
+    for r in readings[1:]:
+        current = r.observed_at.timestamp()
+        if current - previous > policy.max_gap_seconds:
+            if previous > span_start:
+                spans.append((span_start, previous))
+            span_start = current
+        previous = current
+
+    if previous > span_start:
+        spans.append((span_start, previous))
+
+    return spans
+
+
+def _covered_seconds_within(
+    spans: list[tuple[float, float]],
+    window_start: float,
+    window_end: float,
+) -> float:
+    """Return the seconds of *window* that fall inside continuously covered spans."""
+    if window_end <= window_start:
+        return 0.0
+    return sum(
+        max(0.0, min(span_end, window_end) - max(span_start, window_start))
+        for span_start, span_end in spans
+    )
+
+
+def _ends_in_observed_return_to_range(
+    interval_end: float,
+    spans: list[tuple[float, float]],
+) -> bool:
+    """Return True if an excursion interval ended by re-entering the normal range.
+
+    A valid excursion interval can end for two very different reasons: the
+    temperature path crossed back into range, or observation simply stopped (a data
+    gap, or the final reading). Only the first is a recovery. The interval end is a
+    genuine return to range exactly when it falls strictly inside a continuously
+    covered span, because the path was still being observed immediately afterwards.
+    """
+    for span_start, span_end in spans:
+        if span_start <= interval_end <= span_end:
+            return interval_end < span_end - 1e-6
+    return False
+
+
 def _compute_door_temporal_facts(
     ctx: ToolContext,
     door_events: list[Event],
 ) -> dict[str, Any] | None:
-    """Compute deterministic temporal facts regarding door opening and temperature excursion.
+    """Compute deterministic temporal facts relating door state to the excursion.
 
-    Includes door opening before rise, overlap interval, and recovery after close.
-    Describes temporal association without claiming causation.
+    Reports door opening before rise, overlap with measured excursion coverage, and
+    recovery after close. Every claim is confined to observed or validly interpolated
+    coverage:
+
+    - Overlap is reported as separate covered segments. Disjoint segments are never
+      collapsed into one interval, and unobserved time inside the door-open window is
+      reported separately as ``overlap_unknown_seconds``.
+    - Recovery is claimed only when the excursion interval containing the door close
+      ends with a transition back into range inside continuous coverage. Otherwise the
+      result is "not established" — never "did not recover".
+
+    Absence of evidence is never reported as evidence of absence, and a temporal
+    association never claims causation.
     """
     if not door_events:
         return None
@@ -598,18 +712,20 @@ def _compute_door_temporal_facts(
     if ref_measurement is None:
         return None
 
-    has_excursion = (
-        ref_measurement.estimated_out_of_range_seconds > 0.0
-        or ref_measurement.first_observed_out_at is not None
-    )
-    if not has_excursion:
+    if not is_excursion_detected(ref_measurement):
         return {
             "has_excursion": False,
             "door_opened_before_rise": False,
             "lead_time_seconds": None,
             "overlap_interval": None,
+            "overlap_segments": [],
+            "overlap_measured_seconds": 0.0,
+            "overlap_unknown_seconds": 0.0,
+            "overlap_status": "not_applicable",
             "temperature_recovered_after_close": False,
             "recovery_time_seconds": None,
+            "recovery_status": "not_applicable",
+            "recovery_reason": None,
             "record_ids": [],
             "method_version": TOOLS_VERSION,
             "summary": (
@@ -625,6 +741,7 @@ def _compute_door_temporal_facts(
 
     policy = ctx.snapshot.policy
     valid_intervals = _get_valid_excursion_intervals(ref_readings, policy)
+    covered_spans = _covered_spans(ref_readings, policy)
 
     tz = ref_readings[0].observed_at.tzinfo if ref_readings else None
 
@@ -633,7 +750,7 @@ def _compute_door_temporal_facts(
     t_rise: datetime | None = None
     if valid_intervals:
         w_start_ts = valid_intervals[0][0]
-        t_rise = datetime.fromtimestamp(w_start_ts, tz=tz)
+        t_rise = _instant(w_start_ts, tz)
         if (
             ref_measurement.first_observed_out_at is not None
             and ref_measurement.first_observed_out_at < t_rise
@@ -649,7 +766,7 @@ def _compute_door_temporal_facts(
 
     if valid_intervals:
         for iv_start_ts, iv_end_ts in valid_intervals:
-            used_timestamps.append(datetime.fromtimestamp(iv_end_ts, tz=tz))
+            used_timestamps.append(_instant(iv_end_ts, tz))
             for i, r in enumerate(ref_readings):
                 r_ts = r.observed_at.timestamp()
                 if iv_start_ts <= r_ts <= iv_end_ts:
@@ -670,13 +787,13 @@ def _compute_door_temporal_facts(
     else:
         # No valid interpolated intervals (e.g. out-of-range readings across unobserved gaps)
         for r in ref_readings:
-            if _out_of_range(r.temperature_c, policy.min_c, policy.max_c):
+            if is_out_of_range(r.temperature_c, policy.min_c, policy.max_c):
                 used_record_ids.add(r.event_id)
                 used_timestamps.append(r.observed_at)
 
     sorted_door_events = sorted(door_events, key=lambda e: (e.observed_at, e.event_id))
-    open_events = [e for e in sorted_door_events if e.value == "open"]
-    close_events = [e for e in sorted_door_events if e.value == "closed"]
+    open_events = [e for e in sorted_door_events if e.value == DoorState.open]
+    close_events = [e for e in sorted_door_events if e.value == DoorState.closed]
 
     # 1. Door opening before rise
     prior_open = (
@@ -688,7 +805,7 @@ def _compute_door_temporal_facts(
     if prior_open:
         open_event = max(prior_open, key=lambda e: e.observed_at)
         door_opened_before_rise = True
-        lead_time_seconds = round((t_rise - open_event.observed_at).total_seconds(), 1)
+        lead_time_seconds = _elapsed_seconds(open_event.observed_at, t_rise)
         used_record_ids.add(open_event.event_id)
         used_timestamps.append(open_event.observed_at)
     else:
@@ -699,8 +816,17 @@ def _compute_door_temporal_facts(
             used_record_ids.add(open_event.event_id)
             used_timestamps.append(open_event.observed_at)
 
-    # 2. Overlap interval
+    # 2. Overlap between the door-open window and measured excursion coverage.
+    #
+    # Overlap is only ever measured inside validly interpolated intervals. An
+    # unobserved gap inside the door-open window is reported as unknown time, never
+    # folded into a covered segment and never treated as proof that no overlap
+    # occurred there.
     overlap_interval: dict[str, Any] | None = None
+    overlap_segments_out: list[dict[str, Any]] = []
+    overlap_measured_seconds = 0.0
+    overlap_unknown_seconds = 0.0
+    overlap_status = "no_door_open_event_observed"
     close_event: Event | None = None
     if open_event:
         subsequent_closes = [e for e in close_events if e.observed_at >= open_event.observed_at]
@@ -723,34 +849,81 @@ def _compute_door_temporal_facts(
             if ov_start < ov_end:
                 overlap_segments.append((ov_start, ov_end))
 
-        if overlap_segments:
-            ov_s = overlap_segments[0][0]
-            ov_e = overlap_segments[-1][1]
-            overlap_duration = round(sum(e - s for s, e in overlap_segments), 1)
-            start_dt = datetime.fromtimestamp(ov_s, tz=tz)
-            end_dt = datetime.fromtimestamp(ov_e, tz=tz)
-            overlap_interval = {
-                "start_at": start_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "end_at": end_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "duration_seconds": overlap_duration,
-            }
+        # Unobserved time inside the door-open window. This is the portion of the
+        # window for which no overlap claim can be made either way.
+        door_window_seconds = max(0.0, door_close_ts - door_open_ts)
+        overlap_unknown_seconds = round(
+            door_window_seconds
+            - _covered_seconds_within(covered_spans, door_open_ts, door_close_ts),
+            1,
+        )
+
+        for seg_start, seg_end in overlap_segments:
+            start_dt = _instant(seg_start, tz)
+            end_dt = _instant(seg_end, tz)
+            overlap_segments_out.append(
+                {
+                    "start_at": _iso_z(start_dt),
+                    "end_at": _iso_z(end_dt),
+                    "duration_seconds": _elapsed_seconds(start_dt, end_dt),
+                }
+            )
             used_timestamps.append(start_dt)
             used_timestamps.append(end_dt)
 
-    # 3. Recovery after close
-    # Only applies if door closed during an ongoing excursion, and temperature
-    # recovered back to normal range before cutoff (not censored at end).
+        overlap_measured_seconds = round(
+            sum(seg["duration_seconds"] for seg in overlap_segments_out), 1
+        )
+
+        if len(overlap_segments) == 1:
+            # A single covered segment is genuinely continuous, so it can also be
+            # presented as one interval.
+            overlap_interval = dict(overlap_segments_out[0])
+            overlap_status = "measured_contiguous"
+        elif len(overlap_segments) > 1:
+            # Disjoint segments separated by unobserved time. Deliberately leave
+            # overlap_interval unset: collapsing these into one span would describe
+            # the gap as part of a continuous overlap.
+            overlap_interval = None
+            overlap_status = "measured_disjoint"
+        elif overlap_unknown_seconds > 0.0:
+            overlap_status = "not_established"
+        else:
+            overlap_status = "none_within_covered_data"
+
+    # 3. Recovery after close.
+    #
+    # Recovery is claimed only when the excursion interval containing the door close
+    # ends with an observed or validly interpolated transition back into range,
+    # inside continuous coverage. An interval that ends at a data gap or at the last
+    # reading ended because observation stopped, not because the temperature
+    # recovered, so the outcome there is "not established" rather than "did not
+    # recover".
     temperature_recovered_after_close = False
     recovery_time_seconds: float | None = None
-    if close_event and not ref_measurement.censored_end and valid_intervals:
+    recovery_status = "not_established"
+    recovery_reason: str | None = None
+
+    if close_event is None:
+        recovery_reason = "no_door_close_event_observed_before_cutoff"
+    else:
         close_ts = close_event.observed_at.timestamp()
-        for v_start, v_end in valid_intervals:
-            if v_start <= close_ts < v_end:
-                temperature_recovered_after_close = True
-                recovery_time_seconds = round(v_end - close_ts, 1)
-                recovery_dt = datetime.fromtimestamp(v_end, tz=tz)
-                used_timestamps.append(recovery_dt)
-                break
+        containing = next(
+            ((s, e) for s, e in valid_intervals if s <= close_ts < e),
+            None,
+        )
+        if containing is None:
+            recovery_reason = "door_close_not_within_measured_excursion_coverage"
+        elif _ends_in_observed_return_to_range(containing[1], covered_spans):
+            temperature_recovered_after_close = True
+            recovery_status = "recovered"
+            recovery_dt = _instant(containing[1], tz)
+            recovery_time_seconds = _elapsed_seconds(close_event.observed_at, recovery_dt)
+            used_timestamps.append(recovery_dt)
+        elif ref_measurement.censored_end:
+            recovery_reason = "observed_coverage_ends_while_still_out_of_range"
+        else:
+            recovery_reason = "observed_coverage_ends_at_a_data_gap_before_any_return_to_range"
 
     # Narrative describing temporal association without claiming causation
     parts: list[str] = []
@@ -762,25 +935,67 @@ def _compute_door_temporal_facts(
     else:
         parts.append("Door open event was not observed prior to temperature rise.")
 
-    if overlap_interval:
+    if overlap_status == "measured_contiguous" and overlap_interval is not None:
+        sentence = (
+            f"Door-open and excursion overlap measured "
+            f"{overlap_interval['duration_seconds']}s "
+            f"({overlap_interval['start_at']} to {overlap_interval['end_at']})"
+        )
+        if overlap_unknown_seconds > 0.0:
+            sentence += (
+                f"; a further {overlap_unknown_seconds}s of the door-open window is "
+                "unobserved, so the total exposure may be longer"
+            )
+        parts.append(sentence + ".")
+    elif overlap_status == "measured_disjoint":
+        rendered = ", ".join(
+            f"{seg['start_at']} to {seg['end_at']} ({seg['duration_seconds']}s)"
+            for seg in overlap_segments_out
+        )
         parts.append(
-            f"Door-open and excursion overlap duration was {overlap_interval['duration_seconds']}s "
-            f"({overlap_interval['start_at']} to {overlap_interval['end_at']})."
+            f"Door-open and excursion overlap measured {overlap_measured_seconds}s across "
+            f"{len(overlap_segments_out)} separately observed segments ({rendered}); "
+            f"{overlap_unknown_seconds}s of the door-open window is unobserved, so these "
+            "segments cannot be shown to be one continuous overlap."
+        )
+    elif overlap_status == "not_established":
+        parts.append(
+            "No overlap between the open door and measured excursion coverage could be "
+            f"established: {overlap_unknown_seconds}s of the door-open window is unobserved, "
+            "so an overlap there can be neither measured nor ruled out."
+        )
+    elif overlap_status == "none_within_covered_data":
+        parts.append(
+            "No overlap between the open door and the excursion window within "
+            "continuously observed coverage."
         )
     else:
-        parts.append("No overlap observed between open door and excursion window.")
+        parts.append("No door open event was observed in the snapshot.")
 
     if temperature_recovered_after_close:
         parts.append(
             f"Temperature returned to normal range {recovery_time_seconds}s after door closed."
         )
+    elif recovery_reason == "no_door_close_event_observed_before_cutoff":
+        parts.append(
+            "No door close event was observed prior to cutoff, so recovery after close "
+            "could not be established."
+        )
+    elif recovery_reason == "observed_coverage_ends_while_still_out_of_range":
+        parts.append(
+            "Recovery after door close could not be established: observed readings end "
+            "while still out of range, and the snapshot does not extend further."
+        )
+    elif recovery_reason == "door_close_not_within_measured_excursion_coverage":
+        parts.append(
+            "Recovery after door close could not be established: the door close does not "
+            "fall inside a measured excursion interval."
+        )
     else:
-        if close_event:
-            parts.append(
-                "Temperature did not recover to normal range after door closed prior to cutoff."
-            )
-        else:
-            parts.append("No door close event observed prior to cutoff.")
+        parts.append(
+            "Recovery after door close could not be established: observed coverage ends at "
+            "a data gap before any return to normal range."
+        )
 
     parts.append("Temporal association observed; does not establish causation.")
     summary = " ".join(parts)
@@ -808,9 +1023,18 @@ def _compute_door_temporal_facts(
         "has_excursion": True,
         "door_opened_before_rise": door_opened_before_rise,
         "lead_time_seconds": lead_time_seconds,
+        # Present only when the overlap is a single continuously covered segment.
+        # None whenever the covered segments are disjoint, so that an unobserved gap
+        # is never rendered as part of one continuous interval.
         "overlap_interval": overlap_interval,
+        "overlap_segments": overlap_segments_out,
+        "overlap_measured_seconds": overlap_measured_seconds,
+        "overlap_unknown_seconds": overlap_unknown_seconds,
+        "overlap_status": overlap_status,
         "temperature_recovered_after_close": temperature_recovered_after_close,
         "recovery_time_seconds": recovery_time_seconds,
+        "recovery_status": recovery_status,
+        "recovery_reason": recovery_reason,
         "record_ids": sorted(list(used_record_ids)),
         "method_version": TOOLS_VERSION,
         "summary": summary,
@@ -861,7 +1085,8 @@ def get_refrigeration_events(ctx: ToolContext) -> dict[str, Any]:
             e for e in ctx.snapshot.events if e.event_type == EventType.refrigeration_state
         ]
         res["has_fault_or_stopped"] = any(
-            e.value in ("fault", "stopped") for e in all_refrig
+            e.value in (RefrigerationState.fault, RefrigerationState.stopped)
+            for e in all_refrig
         )
     else:
         res["has_fault_or_stopped"] = False

@@ -548,7 +548,8 @@ def test_get_handling_policy():
 
 
 def test_integration_with_door_snapshot_and_canonical_report():
-    door_path = Path("contracts/examples/door-snapshot.json")
+    repo_root = Path(__file__).resolve().parents[3]
+    door_path = repo_root / "contracts" / "examples" / "door-snapshot.json"
     assert door_path.is_file()
     snap_data = json.loads(door_path.read_text(encoding="utf-8"))
     snapshot = Snapshot.model_validate(snap_data)
@@ -1198,8 +1199,202 @@ def test_door_overlap_not_claimed_across_unobserved_gap():
     # No recovery can be established across unobserved gap
     assert tf["temperature_recovered_after_close"] is False
     assert tf["recovery_time_seconds"] is None
-    assert "No overlap observed between open door and excursion window" in tf["summary"]
+    # The door-open window lies entirely inside unobserved time, so the summary must
+    # report that overlap could not be established rather than that none occurred.
+    assert tf["overlap_status"] == "not_established"
+    assert tf["overlap_measured_seconds"] == 0.0
+    assert tf["overlap_unknown_seconds"] == 100.0
+    assert "could not be established" in tf["summary"]
+    assert "neither measured nor ruled out" in tf["summary"]
+    assert "No overlap observed" not in tf["summary"]
+    assert tf["recovery_status"] == "not_established"
+    assert "did not recover" not in tf["summary"]
 
 
 
 
+
+
+# ── Regression: disjoint overlap and unestablished recovery ─────────────────
+
+
+def _ref_only_snapshot(
+    temps: list[tuple[int, float]],
+    door: list[tuple[int, str]],
+    cutoff_seconds: int = 600,
+) -> Snapshot:
+    """Build a single-reference-sensor snapshot from (offset_seconds, value) pairs."""
+    ref_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, "sensor.ref"))
+    readings = [
+        Reading(
+            event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, f"reg.r.{offset}")),
+            sensor_id=ref_id,
+            observed_at=_ts(offset),
+            temperature_c=temp,
+        )
+        for offset, temp in temps
+    ]
+    events = [
+        Event(
+            event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, f"reg.d.{offset}")),
+            observed_at=_ts(offset),
+            event_type=EventType.door_state,
+            value=value,
+            source="sensor",
+        )
+        for offset, value in door
+    ]
+    return _make_snapshot(
+        readings=readings,
+        sensors=[Sensor(sensor_id=ref_id, placement="center", role=SensorRole.reference)],
+        events=events,
+        cutoff_seconds=cutoff_seconds,
+    )
+
+
+def test_disjoint_overlap_segments_are_not_reported_as_one_interval():
+    """Covered segments split by an unobserved gap must not become one continuous overlap.
+
+    Reference readings are 10°C at 0s, 60s, 300s and 360s with max_gap_seconds=120,
+    and the door is open for the whole 0-360s window. The detector measures 120s out
+    of range and 240s unknown. The 60-300s gap is unobserved, so the two covered
+    segments cannot be shown to be one continuous overlap: the tool must report them
+    separately and must not emit a single 0-360s interval.
+    """
+    snap = _ref_only_snapshot(
+        temps=[(0, 10.0), (60, 10.0), (300, 10.0), (360, 10.0)],
+        door=[(0, "open"), (360, "closed")],
+    )
+    ctx = ToolContext(snap)
+
+    # The deterministic detector behaviour is unchanged by this fix.
+    ref_m = ctx.measurements[0]
+    assert ref_m.estimated_out_of_range_seconds == 120.0
+    assert ref_m.unknown_duration_seconds == 240.0
+
+    tf = get_door_events(ctx)["temporal_facts"]
+    assert tf is not None
+
+    # The regression: a single interval spanning the unobserved gap.
+    assert tf["overlap_interval"] is None
+    assert tf["overlap_status"] == "measured_disjoint"
+
+    segments = tf["overlap_segments"]
+    assert len(segments) == 2
+    assert segments[0]["duration_seconds"] == 60.0
+    assert segments[1]["duration_seconds"] == 60.0
+    assert segments[0]["end_at"] != segments[1]["start_at"]
+
+    # Measured time and unknown time stay distinct, and agree with the detector.
+    assert tf["overlap_measured_seconds"] == 120.0
+    assert tf["overlap_unknown_seconds"] == 240.0
+    assert tf["overlap_measured_seconds"] == ref_m.estimated_out_of_range_seconds
+    assert tf["overlap_unknown_seconds"] == ref_m.unknown_duration_seconds
+
+    # The narrative must not describe the gap as part of a continuous overlap.
+    assert "cannot be shown to be one continuous overlap" in tf["summary"]
+    assert "unobserved" in tf["summary"]
+
+
+def test_recovery_not_claimed_at_last_high_reading_before_gap():
+    """An excursion interval that ends at a data gap is not a recovery.
+
+    Reference readings are 10°C at 0s, 60s and 300s, then 5°C at 360s, with the door
+    open at 0s and closed at 30s. The 60-300s gap ends the first covered span while
+    the 60s reading is still 10°C, so the interval ending at 60s ended because
+    observation stopped, not because the temperature returned to range. Recovery must
+    be reported as not established rather than claimed at 60s.
+    """
+    snap = _ref_only_snapshot(
+        temps=[(0, 10.0), (60, 10.0), (300, 10.0), (360, 5.0)],
+        door=[(0, "open"), (30, "closed")],
+    )
+    ctx = ToolContext(snap)
+    tf = get_door_events(ctx)["temporal_facts"]
+    assert tf is not None
+
+    # The regression: recovery claimed 30s after close, at a still-10°C reading.
+    assert tf["temperature_recovered_after_close"] is False
+    assert tf["recovery_time_seconds"] is None
+    assert tf["recovery_status"] == "not_established"
+    assert tf["recovery_reason"] == (
+        "observed_coverage_ends_at_a_data_gap_before_any_return_to_range"
+    )
+
+    # Not established is not the same as ruled out.
+    assert "could not be established" in tf["summary"]
+    assert "did not recover" not in tf["summary"]
+
+
+def test_recovery_still_claimed_on_observed_return_within_continuous_coverage():
+    """A genuine in-range transition inside continuous coverage is still a recovery."""
+    snap = _ref_only_snapshot(
+        temps=[(0, 5.0), (60, 9.0), (90, 9.0), (120, 5.0)],
+        door=[(30, "open"), (90, "closed")],
+        cutoff_seconds=300,
+    )
+    ctx = ToolContext(snap)
+    tf = get_door_events(ctx)["temporal_facts"]
+    assert tf is not None
+
+    assert tf["temperature_recovered_after_close"] is True
+    assert tf["recovery_status"] == "recovered"
+    assert tf["recovery_time_seconds"] == 7.5  # crossing at 97.5s, close at 90s
+    assert tf["recovery_reason"] is None
+
+    # Coverage is continuous throughout, so the overlap is a single real interval.
+    assert tf["overlap_status"] == "measured_contiguous"
+    assert tf["overlap_interval"] is not None
+    assert tf["overlap_unknown_seconds"] == 0.0
+    assert "Temperature returned to normal range" in tf["summary"]
+
+
+def test_overlap_interval_reconciles_with_its_reported_duration():
+    """A rendered overlap interval must subtract to its own duration_seconds.
+
+    Interpolated threshold crossings land on fractional seconds. Truncating them to
+    whole seconds makes the rendered window wider than the duration reported beside
+    it, which is exactly the kind of unreconcilable number this report must not show.
+    """
+    # 5°C to 9°C over 50s puts the 8°C crossing at 37.5s; 9°C to 3°C over 50s puts the
+    # return crossing at 108.33s. Both are deliberately off whole seconds.
+    snap = _ref_only_snapshot(
+        temps=[(0, 5.0), (50, 9.0), (100, 9.0), (150, 3.0)],
+        door=[(10, "open"), (130, "closed")],
+        cutoff_seconds=300,
+    )
+    ctx = ToolContext(snap)
+    tf = get_door_events(ctx)["temporal_facts"]
+    assert tf is not None
+    assert tf["overlap_status"] == "measured_contiguous"
+
+    interval = tf["overlap_interval"]
+    # Sub-second precision is preserved rather than truncated to a whole second.
+    assert interval["start_at"] == "2026-01-01T12:00:37.500Z"
+    assert interval["end_at"] == "2026-01-01T12:01:48.300Z"
+
+    start = datetime.fromisoformat(interval["start_at"].replace("Z", "+00:00"))
+    end = datetime.fromisoformat(interval["end_at"].replace("Z", "+00:00"))
+    assert (end - start).total_seconds() == interval["duration_seconds"]
+    assert tf["overlap_measured_seconds"] == interval["duration_seconds"]
+
+
+def test_no_overlap_within_full_coverage_is_stated_as_absence_not_uncertainty():
+    """With continuous coverage and no overlap, absence may be stated plainly."""
+    # Door opens and closes well before the excursion, with no gaps anywhere.
+    snap = _ref_only_snapshot(
+        temps=[(0, 5.0), (60, 5.0), (120, 5.0), (180, 9.0), (240, 5.0)],
+        door=[(10, "open"), (20, "closed")],
+        cutoff_seconds=300,
+    )
+    ctx = ToolContext(snap)
+    tf = get_door_events(ctx)["temporal_facts"]
+    assert tf is not None
+
+    assert tf["overlap_status"] == "none_within_covered_data"
+    assert tf["overlap_unknown_seconds"] == 0.0
+    assert "within continuously observed coverage" in tf["summary"]
+    # Even here, recovery after this close is not established: the close is not inside
+    # the excursion, so nothing about it can be concluded.
+    assert tf["recovery_status"] == "not_established"
+    assert "did not recover" not in tf["summary"]
