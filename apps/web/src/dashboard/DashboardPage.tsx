@@ -52,9 +52,7 @@ function MetricCard({ label, value, detail, tone }: { label: string; value: stri
     <article className={`metric-card metric-card--${tone}`}>
       <div className="metric-label">{label}</div>
       <div className="metric-value">{value}</div>
-      <div className="metric-detail">
-        {detail}
-      </p>
+      <div className="metric-detail">{detail}</div>
     </article>
   );
 }
