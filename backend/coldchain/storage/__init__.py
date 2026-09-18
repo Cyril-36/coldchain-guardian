@@ -23,6 +23,7 @@ from coldchain.contracts.schemas import (
     StageEvent,
 )
 
+from .aws import AwsStorage
 from .exceptions import (
     ActiveRunLimitExceededError,
     ConditionalCheckFailedError,
@@ -37,6 +38,7 @@ from .exceptions import (
     TemporaryEnqueueError,
     TemporaryStorageError,
 )
+from .memory import MemoryStorage
 
 
 @runtime_checkable
@@ -196,8 +198,10 @@ class StorageProtocol(Protocol):
 
 
 __all__ = [
-    # Protocols
+    # Protocols and adapters
     "ArtifactSignerProtocol",
+    "AwsStorage",
+    "MemoryStorage",
     "QueueSenderProtocol",
     "StorageProtocol",
     # Exceptions
