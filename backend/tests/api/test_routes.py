@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 
+from coldchain.contracts.enums import ReviewDecision
 from coldchain.storage import MemoryStorage, TemporaryStorageError
 
 from .conftest import NOW, decode, event
@@ -103,6 +104,36 @@ def test_public_routes_never_expose_non_curated_run(api_factory) -> None:
     body = decode(public)
     assert "owner_sub" not in body
     assert "scenario_id" not in body
+
+
+def test_public_run_list_and_detail_redact_private_review(api_factory) -> None:
+    app, storage, _ = api_factory()
+    run_id = decode(_create(app))["run_id"]
+    report = complete_run(storage, run_id)
+    storage.save_review(
+        run_id,
+        "private-operator-subject",
+        report.report_id,
+        ReviewDecision.acknowledged,
+        "Private operator note.",
+    )
+    storage.set_public_demo(run_id, {"label": "Curated synthetic control"})
+
+    public_list = app.handle(event("GET", "/v1/demo-runs", subject=None))
+    public_detail = app.handle(event("GET", f"/v1/demo-runs/{run_id}", subject=None))
+    owner_detail = app.handle(event("GET", f"/v1/runs/{run_id}"))
+
+    assert public_list["statusCode"] == 200
+    assert public_detail["statusCode"] == 200
+    assert owner_detail["statusCode"] == 200
+    listed_run = next(item for item in decode(public_list) if item["run_id"] == run_id)
+    assert listed_run["review"] is None
+    assert decode(public_detail)["review"] is None
+    public_payload = public_list["body"] + public_detail["body"]
+    assert "private-operator-subject" not in public_payload
+    assert "Private operator note." not in public_payload
+    assert decode(owner_detail)["review"]["actor_sub"] == "private-operator-subject"
+    assert decode(owner_detail)["review"]["note"] == "Private operator note."
 
 
 def test_each_private_demo_subresource_returns_404(api_factory) -> None:

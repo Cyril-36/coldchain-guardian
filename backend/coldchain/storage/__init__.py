@@ -181,6 +181,10 @@ class StorageProtocol(Protocol):
         """List curated public demonstration run summaries."""
         ...
 
+    def get_public_run(self, run_id: str) -> Run | None:
+        """Retrieve an explicitly curated public run, or None when absent/private."""
+        ...
+
     def mark_queued(self, run_id: str) -> None:
         """Conditionally transition status to queued if in pending_enqueue / preparing.
 

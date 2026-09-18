@@ -51,6 +51,15 @@ def _dump(value: Any) -> Any:
     return value.model_dump(mode="json") if hasattr(value, "model_dump") else value
 
 
+def _dump_public_run(value: Any) -> dict[str, Any]:
+    """Serialize a public run without operator identity or private review notes."""
+    result = _dump(value)
+    if not isinstance(result, dict):
+        raise TypeError("public run serialization must produce an object")
+    result["review"] = None
+    return result
+
+
 class ApiApplication:
     """Small framework-free HTTP application with injected business dependencies."""
 
@@ -168,7 +177,7 @@ class ApiApplication:
             public_runs = [
                 run for run in self.service.storage.list_public_runs() if run.is_public_demo
             ]
-            return HttpResponse(200, [_dump(run) for run in public_runs[:5]])
+            return HttpResponse(200, [_dump_public_run(run) for run in public_runs[:5]])
 
         demo_match = _DEMO_ROUTE.fullmatch(path)
         if demo_match and method == "GET":
@@ -180,7 +189,7 @@ class ApiApplication:
                 return HttpResponse(200, _dump(self.service.get_report(run)))
             if resource == "download":
                 return HttpResponse(200, self.service.get_download(run))
-            return HttpResponse(200, _dump(run))
+            return HttpResponse(200, _dump_public_run(run))
 
         if method == "GET" and path == "/v1/scenarios":
             self._operator(event, require_write=False)

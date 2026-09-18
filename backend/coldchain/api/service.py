@@ -7,7 +7,7 @@ import json
 import secrets
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Any
 from uuid import UUID
 
 from coldchain.contracts import (
@@ -40,12 +40,6 @@ SCENARIO_CATALOGUE: tuple[dict[str, str], ...] = (
 )
 
 
-class PublicRunStorage(StorageProtocol, Protocol):
-    """API-required extension implemented by both canonical storage adapters."""
-
-    def get_public_run(self, run_id: str) -> Run | None: ...
-
-
 def _request_hash(request: CreateRunRequest) -> str:
     payload = json.dumps(
         request.model_dump(mode="json"),
@@ -71,7 +65,7 @@ class ApiService:
 
     def __init__(
         self,
-        storage: PublicRunStorage,
+        storage: StorageProtocol,
         queue: QueueSenderProtocol,
         *,
         clock: Callable[[], datetime] | None = None,

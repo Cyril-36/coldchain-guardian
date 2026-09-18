@@ -17,6 +17,8 @@ only verified claims from `requestContext.authorizer.jwt.claims`; it never decod
 - Protected run reads return `404` for a missing run or a run owned by another operator.
 - Every public subresource independently checks `is_public_demo=true`; knowing a private UUID is
   not enough to read it.
+- Public run lists and details set `review` to `null`; operator identity and review notes are
+  available only from the owner-authorized run route.
 - The review actor is always taken from the verified JWT subject. A client-supplied actor is
   rejected as an unknown field.
 
@@ -276,7 +278,5 @@ sender is tested for its exact message body and provider-error mapping. These ch
 real API Gateway, Cognito, DynamoDB, S3, SQS, IAM, CORS, or presigned-URL behavior. Cyril must run
 the cloud round trip in `docs/VERIFICATION.md` after integrating this Lambda with the SAM stack.
 
-Both current storage adapters implement `get_public_run`, but the leader-owned `StorageProtocol`
-does not yet declare it. The API uses a narrow structural `PublicRunStorage` extension rather than
-changing the canonical contract in this milestone. Cyril should add or explicitly confirm that
-method on the shared protocol before the cloud integration is considered frozen.
+`StorageProtocol.get_public_run(run_id) -> Run | None` is the canonical narrow lookup for a
+curated public run. Both current storage adapters implement it without scanning private runs.

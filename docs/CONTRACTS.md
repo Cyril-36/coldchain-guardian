@@ -84,8 +84,8 @@ Base: `/v1`. Error shape: `{ "error": { "code": "...", "message": "...", "reques
 | Method and route | Access | Request / response |
 |---|---|---|
 | GET /health | Public | `{status:"ok", schema_version:"1.0", build_sha:"..."}`; no resource names/secrets |
-| GET /demo-runs | Public | Curated public run summaries, at most 5 |
-| GET /demo-runs/{run_id} | Curated public only | Same public-safe run response as operator read |
+| GET /demo-runs | Public | Curated public run summaries, at most 5; review identity and notes omitted |
+| GET /demo-runs/{run_id} | Curated public only | Public-safe run with review identity and notes omitted |
 | GET /demo-runs/{run_id}/snapshot | Curated public only | Synthetic snapshot |
 | GET /demo-runs/{run_id}/report | Curated public only | Validated report |
 | GET /demo-runs/{run_id}/download | Curated public only | Short-lived JSON artifact URL |
@@ -98,6 +98,8 @@ Base: `/v1`. Error shape: `{ "error": { "code": "...", "message": "...", "reques
 | POST /runs/{run_id}/review | Owner | `{decision:"acknowledged"|"request_more_evidence",note,report_id}`; 200 review |
 
 Public access to non-curated/private run IDs returns 404. Public demo routes and protected operator routes are separate, as listed above. All public subresources enforce `is_public_demo=true`; all protected routes use API Gateway JWT authorisation and backend ownership checks. Frontend gets both paths from the frozen OpenAPI.
+
+Public run summaries and details never expose `Review.actor_sub` or `Review.note`. The public wire representation sets `review` to `null`; the owner-only run route retains the complete canonical `Review`.
 
 stage_events is a bounded list of up to 40 records: event_id, stage, tool_name (nullable), started_at, finished_at (nullable), status (started/completed/failed) and evidence_ids. Return real execution metadata only, never raw prompts or private reasoning. append_stage_event is a storage-interface method in addition to set_stage. A deterministic replay and a Bedrock investigation use the same event format but retain their distinct generation_mode.
 
@@ -126,6 +128,7 @@ put_report(report) -> ArtifactRef(key, sha256)
 get_report(report_ref) -> Report
 save_review(run_id, actor_sub, report_id, decision, note) -> Review
 list_public_runs() -> list[RunSummary]
+get_public_run(run_id) -> Run | None
 mark_queued(run_id) -> None
 create_report_download_url(report_ref, expires_in_seconds=300) -> str
 
