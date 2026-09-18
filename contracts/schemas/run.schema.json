@@ -1,0 +1,358 @@
+{
+  "$defs": {
+    "ErrorDetail": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "request_id": {
+          "title": "Request Id",
+          "type": "string"
+        },
+        "retryable": {
+          "default": false,
+          "title": "Retryable",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "request_id"
+      ],
+      "title": "ErrorDetail",
+      "type": "object"
+    },
+    "GenerationMode": {
+      "enum": [
+        "bedrock",
+        "deterministic_only"
+      ],
+      "title": "GenerationMode",
+      "type": "string"
+    },
+    "HypothesisType": {
+      "enum": [
+        "door_exposure",
+        "refrigeration_problem",
+        "sensor_disagreement"
+      ],
+      "title": "HypothesisType",
+      "type": "string"
+    },
+    "Outcome": {
+      "enum": [
+        "hypothesis_supported",
+        "unresolved",
+        "no_excursion"
+      ],
+      "title": "Outcome",
+      "type": "string"
+    },
+    "PublicStage": {
+      "enum": [
+        "preparing",
+        "detecting",
+        "collecting_evidence",
+        "comparing_hypotheses",
+        "verifying",
+        "ready",
+        "failed"
+      ],
+      "title": "PublicStage",
+      "type": "string"
+    },
+    "ReportSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "outcome": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "primary_hypothesis": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HypothesisType"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "review_required": {
+          "title": "Review Required",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "outcome",
+        "review_required"
+      ],
+      "title": "ReportSummary",
+      "type": "object"
+    },
+    "Review": {
+      "additionalProperties": false,
+      "properties": {
+        "review_id": {
+          "title": "Review Id",
+          "type": "string"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "report_id": {
+          "title": "Report Id",
+          "type": "string"
+        },
+        "decision": {
+          "$ref": "#/$defs/ReviewDecision"
+        },
+        "note": {
+          "default": "",
+          "maxLength": 1000,
+          "title": "Note",
+          "type": "string"
+        },
+        "actor_sub": {
+          "title": "Actor Sub",
+          "type": "string"
+        },
+        "reviewed_at": {
+          "title": "Reviewed At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "report_id",
+        "decision",
+        "actor_sub",
+        "reviewed_at"
+      ],
+      "title": "Review",
+      "type": "object"
+    },
+    "ReviewDecision": {
+      "enum": [
+        "acknowledged",
+        "request_more_evidence"
+      ],
+      "title": "ReviewDecision",
+      "type": "string"
+    },
+    "RunStatus": {
+      "enum": [
+        "pending_enqueue",
+        "queued",
+        "running",
+        "completed",
+        "needs_review",
+        "failed"
+      ],
+      "title": "RunStatus",
+      "type": "string"
+    },
+    "StageEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "event_id": {
+          "title": "Event Id",
+          "type": "string"
+        },
+        "stage": {
+          "$ref": "#/$defs/PublicStage"
+        },
+        "tool_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tool Name"
+        },
+        "started_at": {
+          "title": "Started At",
+          "type": "string"
+        },
+        "finished_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Finished At"
+        },
+        "status": {
+          "$ref": "#/$defs/StageEventStatus"
+        },
+        "evidence_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "event_id",
+        "stage",
+        "started_at",
+        "status"
+      ],
+      "title": "StageEvent",
+      "type": "object"
+    },
+    "StageEventStatus": {
+      "enum": [
+        "started",
+        "completed",
+        "failed"
+      ],
+      "title": "StageEventStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/RunStatus"
+    },
+    "stage": {
+      "$ref": "#/$defs/PublicStage"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "completed_at": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Completed At"
+    },
+    "report_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Report Id"
+    },
+    "review": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Review"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "generation_mode": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/GenerationMode"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "shipment_id": {
+      "title": "Shipment Id",
+      "type": "string"
+    },
+    "snapshot_id": {
+      "title": "Snapshot Id",
+      "type": "string"
+    },
+    "stage_events": {
+      "items": {
+        "$ref": "#/$defs/StageEvent"
+      },
+      "title": "Stage Events",
+      "type": "array"
+    },
+    "report_summary": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReportSummary"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "error": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ErrorDetail"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "is_public_demo": {
+      "default": false,
+      "title": "Is Public Demo",
+      "type": "boolean"
+    },
+    "label": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Label"
+    }
+  },
+  "required": [
+    "run_id",
+    "status",
+    "stage",
+    "created_at",
+    "shipment_id",
+    "snapshot_id"
+  ],
+  "title": "Run",
+  "type": "object"
+}

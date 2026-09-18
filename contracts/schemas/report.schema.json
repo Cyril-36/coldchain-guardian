@@ -1,0 +1,489 @@
+{
+  "$defs": {
+    "Assessment": {
+      "enum": [
+        "supported",
+        "contradicted",
+        "insufficient"
+      ],
+      "title": "Assessment",
+      "type": "string"
+    },
+    "CoverageStatus": {
+      "enum": [
+        "complete",
+        "partial",
+        "insufficient"
+      ],
+      "title": "CoverageStatus",
+      "type": "string"
+    },
+    "EvidenceInterval": {
+      "additionalProperties": false,
+      "properties": {
+        "start_at": {
+          "title": "Start At",
+          "type": "string"
+        },
+        "end_at": {
+          "title": "End At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start_at",
+        "end_at"
+      ],
+      "title": "EvidenceInterval",
+      "type": "object"
+    },
+    "EvidenceKind": {
+      "enum": [
+        "reading",
+        "event",
+        "derived_metric",
+        "policy"
+      ],
+      "title": "EvidenceKind",
+      "type": "string"
+    },
+    "EvidenceRef": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence_id": {
+          "title": "Evidence Id",
+          "type": "string"
+        },
+        "snapshot_id": {
+          "title": "Snapshot Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/EvidenceKind"
+        },
+        "record_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Record Ids",
+          "type": "array"
+        },
+        "observed_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observed At"
+        },
+        "interval": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EvidenceInterval"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "method_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Method Version"
+        }
+      },
+      "required": [
+        "evidence_id",
+        "snapshot_id",
+        "kind",
+        "summary"
+      ],
+      "title": "EvidenceRef",
+      "type": "object"
+    },
+    "GenerationMode": {
+      "enum": [
+        "bedrock",
+        "deterministic_only"
+      ],
+      "title": "GenerationMode",
+      "type": "string"
+    },
+    "Hypothesis": {
+      "additionalProperties": false,
+      "properties": {
+        "hypothesis": {
+          "$ref": "#/$defs/HypothesisType"
+        },
+        "assessment": {
+          "$ref": "#/$defs/Assessment"
+        },
+        "supporting_evidence_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Supporting Evidence Ids",
+          "type": "array"
+        },
+        "conflicting_evidence_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Conflicting Evidence Ids",
+          "type": "array"
+        },
+        "missing_evidence": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Missing Evidence",
+          "type": "array"
+        },
+        "explanation": {
+          "default": "",
+          "title": "Explanation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "hypothesis",
+        "assessment"
+      ],
+      "title": "Hypothesis",
+      "type": "object"
+    },
+    "HypothesisType": {
+      "enum": [
+        "door_exposure",
+        "refrigeration_problem",
+        "sensor_disagreement"
+      ],
+      "title": "HypothesisType",
+      "type": "string"
+    },
+    "NextCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/NextCheckCode"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "related_evidence_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Related Evidence Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "code",
+        "reason"
+      ],
+      "title": "NextCheck",
+      "type": "object"
+    },
+    "NextCheckCode": {
+      "enum": [
+        "inspect_door",
+        "check_refrigeration",
+        "verify_sensor",
+        "request_missing_logs",
+        "quality_review"
+      ],
+      "title": "NextCheckCode",
+      "type": "string"
+    },
+    "Outcome": {
+      "enum": [
+        "hypothesis_supported",
+        "unresolved",
+        "no_excursion"
+      ],
+      "title": "Outcome",
+      "type": "string"
+    },
+    "SensorMeasurement": {
+      "additionalProperties": false,
+      "properties": {
+        "sensor_id": {
+          "title": "Sensor Id",
+          "type": "string"
+        },
+        "first_observed_out_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "First Observed Out At"
+        },
+        "last_observed_out_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Last Observed Out At"
+        },
+        "estimated_out_of_range_seconds": {
+          "default": 0.0,
+          "title": "Estimated Out Of Range Seconds",
+          "type": "number"
+        },
+        "unknown_duration_seconds": {
+          "default": 0.0,
+          "title": "Unknown Duration Seconds",
+          "type": "number"
+        },
+        "sample_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Sample Count",
+          "type": "integer"
+        },
+        "observed_min_c": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observed Min C"
+        },
+        "observed_max_c": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observed Max C"
+        },
+        "censored_start": {
+          "default": false,
+          "title": "Censored Start",
+          "type": "boolean"
+        },
+        "censored_end": {
+          "default": false,
+          "title": "Censored End",
+          "type": "boolean"
+        },
+        "coverage_status": {
+          "$ref": "#/$defs/CoverageStatus",
+          "default": "complete"
+        },
+        "evidence_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "sensor_id"
+      ],
+      "title": "SensorMeasurement",
+      "type": "object"
+    },
+    "Verification": {
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/VerificationStatus"
+        },
+        "errors": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Errors",
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Warnings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "Verification",
+      "type": "object"
+    },
+    "VerificationStatus": {
+      "enum": [
+        "passed",
+        "blocked"
+      ],
+      "title": "VerificationStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "report_id": {
+      "title": "Report Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "snapshot_id": {
+      "title": "Snapshot Id",
+      "type": "string"
+    },
+    "snapshot_sha256": {
+      "title": "Snapshot Sha256",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "detector_version": {
+      "title": "Detector Version",
+      "type": "string"
+    },
+    "prompt_version": {
+      "default": "1.0.0",
+      "title": "Prompt Version",
+      "type": "string"
+    },
+    "model_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Model Id"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "cutoff_at": {
+      "title": "Cutoff At",
+      "type": "string"
+    },
+    "measurements": {
+      "items": {
+        "$ref": "#/$defs/SensorMeasurement"
+      },
+      "title": "Measurements",
+      "type": "array"
+    },
+    "outcome": {
+      "$ref": "#/$defs/Outcome"
+    },
+    "primary_hypothesis": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/HypothesisType"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "hypotheses": {
+      "items": {
+        "$ref": "#/$defs/Hypothesis"
+      },
+      "title": "Hypotheses",
+      "type": "array"
+    },
+    "next_checks": {
+      "items": {
+        "$ref": "#/$defs/NextCheck"
+      },
+      "title": "Next Checks",
+      "type": "array"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "verification": {
+      "$ref": "#/$defs/Verification"
+    },
+    "generation_mode": {
+      "$ref": "#/$defs/GenerationMode"
+    },
+    "review_required": {
+      "title": "Review Required",
+      "type": "boolean"
+    },
+    "evidence": {
+      "items": {
+        "$ref": "#/$defs/EvidenceRef"
+      },
+      "title": "Evidence",
+      "type": "array"
+    }
+  },
+  "required": [
+    "report_id",
+    "run_id",
+    "snapshot_id",
+    "snapshot_sha256",
+    "detector_version",
+    "created_at",
+    "cutoff_at",
+    "measurements",
+    "outcome",
+    "verification",
+    "generation_mode",
+    "review_required"
+  ],
+  "title": "Report",
+  "type": "object"
+}
