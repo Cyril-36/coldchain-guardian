@@ -4,10 +4,22 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from coldchain.contracts import Snapshot
-from coldchain.contracts.enums import Assessment, EventType, HypothesisType, Outcome
+from coldchain.contracts.enums import (
+    Assessment,
+    EventType,
+    HypothesisType,
+    Outcome,
+    VerificationStatus,
+)
 from coldchain.contracts.schemas import Event
 from coldchain.investigation.agent import investigate
-from coldchain.investigation.tools import get_door_events, get_excursion_summary
+from coldchain.investigation.tools import (
+    MAX_RETURNED_EVENTS,
+    ToolContext,
+    get_door_events,
+    get_excursion_summary,
+    get_refrigeration_events,
+)
 from coldchain.investigation.verifier import InvestigationProposal, ProposedHypothesis
 from coldchain.simulator import generate_snapshot
 
@@ -144,3 +156,65 @@ def test_unobserved_gap_is_reported_even_without_out_of_range_sample() -> None:
     assert report.outcome == Outcome.unresolved
     assert report.verification.status == "blocked"
     assert any("unobserved gaps" in item for item in report.limitations)
+
+
+def test_door_finding_must_cite_a_fault_hidden_beyond_the_returned_event_page():
+    """A conflicting fault outside the tool's visible page still blocks a door finding.
+
+    The event tools cap the list returned to the model at MAX_RETURNED_EVENTS while
+    registering evidence for every event. A verifier that reads fault evidence off
+    that capped page sees no fault at all, so the contradiction check passes
+    vacuously and a door explanation can be asserted while a recorded refrigeration
+    fault goes uncited. AGENTS.md rule 5 requires contradictory evidence to survive
+    into the report.
+    """
+    snapshot = _snapshot("door_exposure")
+    events = list(snapshot.events)
+    non_refrigeration = [e for e in events if e.event_type != EventType.refrigeration_state]
+    refrigeration = [e for e in events if e.event_type == EventType.refrigeration_state]
+
+    # Pad with running events so the single fault falls outside the returned page.
+    padding = [
+        Event(
+            event_id=str(uuid4()),
+            observed_at=snapshot.readings[0].observed_at,
+            event_type=EventType.refrigeration_state,
+            value="running",
+            source="telemetry",
+        )
+        for _ in range(MAX_RETURNED_EVENTS)
+    ]
+    fault = Event(
+        event_id=str(uuid4()),
+        observed_at=snapshot.readings[-1].observed_at,
+        event_type=EventType.refrigeration_state,
+        value="fault",
+        source="telemetry",
+    )
+    padded = snapshot.model_copy(
+        update={"events": non_refrigeration + padding + refrigeration + [fault]}
+    )
+
+    ctx_probe = ToolContext(padded)
+    refrigeration_result = get_refrigeration_events(ctx_probe)
+    # Precondition: the fault is real, registered, and invisible on the returned page.
+    assert refrigeration_result["has_fault_or_stopped"] is True
+    assert refrigeration_result["is_truncated"] is True
+    assert not [e for e in refrigeration_result["events"] if e["value"] == "fault"]
+
+    # An unresolved outcome bypasses the competing-explanations check, so the
+    # contradiction rule is the only thing standing between a "supported" door
+    # hypothesis and a recorded fault that was never cited as conflicting.
+    def proposal(ctx: ToolContext) -> InvestigationProposal:
+        door = _door_proposal(ctx)
+        return InvestigationProposal(
+            outcome=Outcome.unresolved,
+            primary_hypothesis=None,
+            hypotheses=door.hypotheses,
+        )
+
+    report = investigate(padded, str(uuid4()), proposal)
+
+    # The door explanation must not be asserted as supported with the fault uncited.
+    assert report.verification.status == VerificationStatus.blocked
+    assert not [h for h in report.hypotheses if h.assessment == Assessment.supported]

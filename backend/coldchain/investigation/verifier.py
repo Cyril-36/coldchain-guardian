@@ -4,9 +4,18 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from coldchain.contracts.enums import Assessment, HypothesisType, Outcome, SensorRole
+from coldchain.contracts.enums import (
+    Assessment,
+    DoorState,
+    EventType,
+    HypothesisType,
+    Outcome,
+    RefrigerationState,
+    SensorRole,
+)
 from coldchain.investigation.tools import (
     ToolContext,
+    event_evidence_id,
     get_door_events,
     get_excursion_summary,
     get_refrigeration_events,
@@ -51,11 +60,19 @@ def verify_proposal(proposal: InvestigationProposal, ctx: ToolContext) -> list[s
     excursion_ids = {
         sensor["evidence_id"] for sensor in summary["sensors"] if sensor["excursion_detected"]
     }
-    open_ids = {event["evidence_id"] for event in door["events"] if event["value"] == "open"}
+    # Derived from every snapshot event, not from the page the tools return to the
+    # model. A fault beyond that page is still recorded evidence, and a finding that
+    # omits it must be rejected.
+    open_ids = {
+        event_evidence_id(ctx, event.event_id)
+        for event in snapshot.events
+        if event.event_type == EventType.door_state and event.value == DoorState.open
+    }
     fault_ids = {
-        event["evidence_id"]
-        for event in refrigeration["events"]
-        if event["value"] in {"fault", "stopped"}
+        event_evidence_id(ctx, event.event_id)
+        for event in snapshot.events
+        if event.event_type == EventType.refrigeration_state
+        and event.value in {RefrigerationState.fault, RefrigerationState.stopped}
     }
     comparison_ids = {
         item["evidence_id"]

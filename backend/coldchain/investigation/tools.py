@@ -591,9 +591,7 @@ def _build_events_by_type(
 
     result_events: list[dict[str, Any]] = []
     for e in events:
-        ev_id = str(
-            uuid.uuid5(uuid.UUID(ctx._snapshot.snapshot_id), f"event:{e.event_id}")
-        )
+        ev_id = event_evidence_id(ctx, e.event_id)
         time_str = _iso_z(e.observed_at)
         ref = EvidenceRef(
             evidence_id=ev_id,
@@ -626,6 +624,17 @@ def _build_events_by_type(
         "evidence_ids": [ev["evidence_id"] for ev in result_events],
     }
     return result
+
+
+def event_evidence_id(ctx: ToolContext, event_id: str) -> str:
+    """Evidence ID for a snapshot event, matching what the event tools register.
+
+    The event tools cap the list they return to the model but register evidence for
+    every event. A caller that needs the complete picture -- the verifier checking
+    that contradictory evidence was cited -- must derive IDs from the snapshot, not
+    from the returned page. This keeps that derivation in one place.
+    """
+    return str(uuid.uuid5(uuid.UUID(ctx._snapshot.snapshot_id), f"event:{event_id}"))
 
 
 def _get_valid_excursion_intervals(

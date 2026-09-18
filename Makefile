@@ -1,0 +1,42 @@
+# ColdChain Guardian — repository commands (docs/VERIFICATION.md section 5).
+# A clean clone must reproduce every offline check without AWS credentials.
+
+PY ?= python3
+WEB := apps/web
+REGION ?= $(AWS_REGION)
+MODEL ?= $(BEDROCK_MODEL_ID)
+
+.PHONY: help install test lint eval-offline eval-bedrock build probe-bedrock
+
+help:
+	@grep -E '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | sed 's/:.*## /\t/'
+
+install: ## Install backend and frontend dependencies
+	$(PY) -m pip install -e 'backend[dev]'
+	cd $(WEB) && npm install --no-audit --no-fund
+
+test: ## Offline Python and frontend tests
+	$(PY) -m pytest backend/tests
+	cd $(WEB) && npm test -- --run
+
+lint: ## Ruff plus frontend typecheck, and the contract example validator
+	$(PY) -m ruff check scripts backend .
+	$(PY) scripts/check_repo.py
+	$(PY) scripts/validate_examples.py
+	cd $(WEB) && npm run typecheck
+
+eval-offline: ## Deterministic measurement, verifier and rule-baseline checks
+	$(PY) -m pytest backend/tests/core backend/tests/investigation -q
+
+eval-bedrock: ## Bounded live-model evaluation; must be enabled explicitly
+	@test -n "$(EVAL_BEDROCK)" || { echo 'Refusing to spend model calls. Re-run with EVAL_BEDROCK=1'; exit 1; }
+	@test -n "$(REGION)" || { echo 'Set AWS_REGION'; exit 1; }
+	@test -n "$(MODEL)" || { echo 'Set BEDROCK_MODEL_ID'; exit 1; }
+	$(PY) scripts/probe_bedrock.py --region "$(REGION)" --model-id "$(MODEL)"
+
+probe-bedrock: ## One bounded tool-call and structured-output probe
+	$(PY) scripts/probe_bedrock.py --region "$(REGION)" --model-id "$(MODEL)"
+
+build: ## SAM build and frontend production build
+	sam build --template-file infra/template.yaml
+	cd $(WEB) && npm run build
