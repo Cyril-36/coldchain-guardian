@@ -87,7 +87,7 @@ export function useRunData(): RunData {
     }
 
     if (runId) {
-      if (auth.loading) { setData((current) => ({ ...current, protectedRun: true, source: "api", loading: true, error: null, retry })); return; }
+      if (auth.loading) { setData((current) => ({ ...current, protectedRun: true, source: "api", loading: true, snapshotReady: false, reportReady: false, error: null, retry })); return; }
       if (!auth.authenticated) { setData((current) => ({ ...current, protectedRun: true, source: "api", loading: false, snapshotReady: false, reportReady: false, error: null, retry })); return; }
     }
 
