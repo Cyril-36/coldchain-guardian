@@ -115,3 +115,38 @@ def test_reconciled_run_carries_a_visible_reason() -> None:
     # starting another investigation by a run that can never finish.
     second = _queued(storage)
     assert storage.get_run(second) is not None
+
+
+def test_queued_run_that_was_never_claimed_is_reconciled() -> None:
+    """A message can reach the DLQ before any worker claims the run.
+
+    The run then sits `queued` with no attempt id forever: SQS has stopped
+    redelivering and nothing else will pick it up. Reconciliation has to be able to
+    settle it, which means claiming it first so there is an attempt to complete.
+    """
+    storage = MemoryStorage()
+    run_id = _queued(storage)
+
+    stranded = storage.get_run(run_id)
+    assert stranded.status == RunStatus.queued
+    assert stranded.attempt_id is None
+
+    result = reconcile_runs(storage, [run_id], now=LATER)
+    assert result.failed == [run_id]
+
+    settled = storage.get_run(run_id)
+    assert settled.status == RunStatus.failed
+    assert settled.error is not None
+    assert settled.error.message == FAILURE_SUMMARY
+
+
+def test_reconciling_a_never_claimed_run_loses_to_a_worker_that_claims_it_first() -> None:
+    """The claim is conditional, so a live worker still wins the race."""
+    storage = MemoryStorage()
+    run_id = _queued(storage)
+    storage.claim_run(run_id, str(uuid4()), LATER, 300)  # a worker gets there first
+
+    result = reconcile_runs(storage, [run_id], now=LATER)
+    assert result.failed == []
+    assert result.lease_still_active == [run_id]
+    assert storage.get_run(run_id).status == RunStatus.running

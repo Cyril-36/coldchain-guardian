@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from uuid import uuid4
 
 from coldchain.contracts.enums import RunStatus
 from coldchain.storage import ConditionalCheckFailedError, StorageProtocol
@@ -24,6 +25,10 @@ from coldchain.storage import ConditionalCheckFailedError, StorageProtocol
 _TERMINAL = {RunStatus.completed, RunStatus.needs_review, RunStatus.failed}
 
 FAILURE_SUMMARY = "investigation_abandoned_after_retries"
+
+# Long enough to complete the run we just claimed, short enough that a crash here
+# does not strand it again for long.
+_RECONCILE_LEASE_SECONDS = 60
 
 
 @dataclass
@@ -50,9 +55,12 @@ def reconcile_runs(
 ) -> ReconcileResult:
     """Mark abandoned runs failed. Never touches a run that could still succeed.
 
-    A run is only reconciled when it is `running` **and** its lease has expired. An
+    A run is only reconciled when its lease has expired, or when it never had one. An
     unexpired lease means a worker may still be alive and holding it, and failing the
     run underneath that worker would race its own completion.
+
+    A run still `queued` with no attempt is reconcilable too: its message reached the
+    dead-letter queue before any worker claimed it, so nothing will ever pick it up.
     """
     moment = now or datetime.now(UTC)
     result = ReconcileResult()
@@ -68,18 +76,24 @@ def reconcile_runs(
         if run.lease_expires_at is not None and run.lease_expires_at > moment:
             result.lease_still_active.append(run_id)
             continue
-        if run.attempt_id is None:
-            # Queued but never claimed: no lease to release, and no attempt to
-            # complete against. Leave it for the queue rather than guessing.
-            result.lease_still_active.append(run_id)
-            continue
         if dry_run:
             result.failed.append(run_id)
             continue
+
+        attempt_id = run.attempt_id
+        if attempt_id is None:
+            # Queued but never claimed -- the message reached the DLQ before any
+            # worker took it, so there is no attempt to complete against. Claiming it
+            # ourselves creates one. The claim is conditional, so a worker that takes
+            # the run first simply wins and we report a conflict.
+            attempt_id = str(uuid4())
+            claim = storage.claim_run(run_id, attempt_id, moment, _RECONCILE_LEASE_SECONDS)
+            if not claim.success:
+                result.conflicted.append(run_id)
+                continue
+
         try:
-            storage.complete_run(
-                run_id, run.attempt_id, RunStatus.failed, None, FAILURE_SUMMARY
-            )
+            storage.complete_run(run_id, attempt_id, RunStatus.failed, None, FAILURE_SUMMARY)
         except ConditionalCheckFailedError:
             # A worker completed it between our read and our write. Its result wins.
             result.conflicted.append(run_id)

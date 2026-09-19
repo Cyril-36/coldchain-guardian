@@ -29,36 +29,50 @@ from coldchain.storage import AwsStorage  # noqa: E402
 from coldchain.worker.reconcile import reconcile_runs  # noqa: E402
 
 
-def run_ids_from_dlq(queue_url: str, region: str, max_messages: int, delete: bool) -> list[str]:
-    """Read run IDs from the dead-letter queue.
+def read_dlq(queue_url: str, region: str, max_messages: int) -> list[tuple[str, str]]:
+    """Read (run_id, receipt_handle) pairs from the dead-letter queue.
 
-    Messages are left on the queue unless --apply is given, so a dry run cannot lose
-    the evidence of what failed.
+    Nothing is deleted here. A message is the only record that a run was abandoned,
+    so it stays on the queue until its run has actually been settled -- otherwise a
+    crash between the delete and the write loses the recovery evidence entirely.
     """
     import boto3
 
     sqs = boto3.client("sqs", region_name=region)
-    found: list[str] = []
+    found: list[tuple[str, str]] = []
     while len(found) < max_messages:
         batch = sqs.receive_message(
             QueueUrl=queue_url,
             MaxNumberOfMessages=min(10, max_messages - len(found)),
             WaitTimeSeconds=1,
-            VisibilityTimeout=30,
+            # Long enough to reconcile and delete before the message reappears.
+            VisibilityTimeout=120,
         ).get("Messages", [])
         if not batch:
             break
         for message in batch:
             try:
-                found.append(QueueMessage.model_validate(json.loads(message["Body"])).run_id)
+                run_id = QueueMessage.model_validate(json.loads(message["Body"])).run_id
             except Exception:  # noqa: BLE001 - a malformed body is reported, not fatal
                 print(f"  skipped unparseable message {message['MessageId']}", file=sys.stderr)
                 continue
-            if delete:
-                sqs.delete_message(
-                    QueueUrl=queue_url, ReceiptHandle=message["ReceiptHandle"]
-                )
+            found.append((run_id, message["ReceiptHandle"]))
     return found
+
+
+def delete_settled(
+    queue_url: str, region: str, handles_by_run: dict[str, list[str]], settled: set[str]
+) -> int:
+    """Delete only the messages whose runs reached a terminal state."""
+    import boto3
+
+    sqs = boto3.client("sqs", region_name=region)
+    deleted = 0
+    for run_id in settled:
+        for handle in handles_by_run.get(run_id, []):
+            sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=handle)
+            deleted += 1
+    return deleted
 
 
 def main() -> int:
@@ -73,10 +87,11 @@ def main() -> int:
     args = parser.parse_args()
 
     run_ids = list(args.run_id)
+    handles_by_run: dict[str, list[str]] = {}
     if args.dlq_url:
-        run_ids += run_ids_from_dlq(
-            args.dlq_url, args.region, args.max_messages, delete=args.apply
-        )
+        for run_id, handle in read_dlq(args.dlq_url, args.region, args.max_messages):
+            run_ids.append(run_id)
+            handles_by_run.setdefault(run_id, []).append(handle)
     if not run_ids:
         print(json.dumps({"scanned": 0, "note": "no run IDs supplied or found on the DLQ"}))
         return 0
@@ -84,9 +99,26 @@ def main() -> int:
     storage = AwsStorage(table_name=args.table, bucket_name=args.bucket)
     result = reconcile_runs(storage, run_ids, dry_run=not args.apply)
 
+    # Only now, with the runs actually settled, is it safe to drop their messages.
+    # A run already terminal is settled too: its message has nothing left to recover.
+    deleted = 0
+    if args.apply and args.dlq_url:
+        deleted = delete_settled(
+            args.dlq_url,
+            args.region,
+            handles_by_run,
+            set(result.failed) | set(result.already_terminal),
+        )
+
     print(
         json.dumps(
-            {"dry_run": not args.apply, "scanned": len(set(run_ids)), **asdict(result)}, indent=2
+            {
+                "dry_run": not args.apply,
+                "scanned": len(set(run_ids)),
+                "messages_deleted": deleted,
+                **asdict(result),
+            },
+            indent=2,
         )
     )
     if not args.apply and result.failed:

@@ -1,5 +1,6 @@
 """SDK boundary and hard invocation/tool budgets without using AWS."""
 
+import contextlib
 import threading
 import time
 from types import SimpleNamespace
@@ -101,3 +102,26 @@ def test_installed_sdk_accepts_actual_tool_and_structured_output_api(monkeypatch
     assert seen["callback"] is None and seen["retry"] is None
     assert seen["limits"]["turns"] == MAX_MODEL_CALLS
     assert "scenario_id" not in seen["prompt"]
+
+
+def test_failed_invocation_does_not_reuse_the_previous_calls_statistics() -> None:
+    """Stats must describe the call that just happened, or be zero.
+
+    The eval reports token usage and request counts per case. If a failed invocation
+    left the previous call's totals in place, the wrapper would add them a second
+    time and the reported cost would be silently inflated.
+    """
+    from coldchain.investigation.bedrock import BedrockProposer, InvocationStats
+
+    proposer = BedrockProposer("some-model", "us-east-1")
+    proposer.last_stats = InvocationStats(
+        model_calls=5, tool_calls=9, input_tokens=1200, output_tokens=300
+    )
+
+    proposer.deadline = 0.0  # already expired, so the call cannot proceed
+    # The exact failure depends on the environment (expired deadline, missing
+    # credentials); what matters is that any failure leaves the stats reset.
+    with contextlib.suppress(Exception):
+        proposer(object())
+
+    assert proposer.last_stats == InvocationStats()

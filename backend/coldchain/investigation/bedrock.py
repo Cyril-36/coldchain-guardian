@@ -116,6 +116,11 @@ class BedrockProposer:
         self.last_stats = InvocationStats()
 
     def __call__(self, ctx: ToolContext) -> InvestigationProposal:
+        # First statement in the method. If anything below raises -- an import, a
+        # client construction, an access error -- a caller reading last_stats must
+        # see this call's zeros rather than the previous call's totals.
+        self.last_stats = InvocationStats()
+
         from botocore.config import Config
         from strands import Agent, tool
         from strands.hooks import BeforeModelCallEvent, BeforeToolCallEvent

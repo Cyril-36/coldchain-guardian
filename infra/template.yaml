@@ -18,7 +18,11 @@ Parameters:
   BedrockModelId:
     Type: String
     Default: amazon.nova-lite-v1:0
-    Description: Foundation model ID validated in this account and region
+    Description: >-
+      Model or inference-profile ID the worker invokes. Not validated in this
+      account: Bedrock invocation currently returns Operation not allowed for
+      every Amazon model here. Run scripts/probe_bedrock.py and record a passing
+      result before setting EnableBedrock to true.
   BedrockFoundationModelId:
     Type: String
     Default: amazon.nova-lite-v1:0

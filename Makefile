@@ -39,9 +39,13 @@ eval-bedrock: ## Bounded live-model evaluation; must be enabled explicitly
 probe-bedrock: ## One bounded tool-call and structured-output probe
 	$(PY) scripts/probe_bedrock.py --region "$(REGION)" --model-id "$(MODEL)"
 
-reconcile: ## Dry-run DLQ/stale-run reconciliation (add APPLY=1 to make changes)
+# Make treats any non-empty value as true, so a bare $(if $(APPLY)) would let
+# APPLY=0 and APPLY=false mutate. Only these exact words opt in.
+APPLY_FLAG := $(if $(filter 1 true yes on,$(APPLY)),--apply,)
+
+reconcile: ## Dry-run DLQ/stale-run reconciliation (APPLY=1 to make changes)
 	$(PY) scripts/reconcile_runs.py --table "$(RUNS_TABLE)" --bucket "$(ARTIFACT_BUCKET)" \
-	  --region "$(REGION)" --dlq-url "$(DLQ_URL)" $(if $(APPLY),--apply,)
+	  --region "$(REGION)" --dlq-url "$(DLQ_URL)" $(APPLY_FLAG)
 
 build: ## SAM build and frontend production build
 	sam build --template-file infra/template.yaml
