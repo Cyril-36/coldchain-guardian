@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { DashboardPage } from "./DashboardPage";
+import { DashboardPage, formatDuration } from "./DashboardPage";
 import { AuthProvider } from "../auth/AuthProvider";
 
 function renderWithAuth(ui: React.ReactElement) {
@@ -57,6 +57,25 @@ describe("DashboardPage presentation and interactions", () => {
     fireEvent.click(ackButton);
     expect(await screen.findByText("Review saved.")).toBeInTheDocument();
     expect(await screen.findByTestId("reviewer-identity")).toHaveTextContent("operator-session-fixture");
+  });
+});
+
+describe("formatDuration unit behavior", () => {
+  it("formats whole, sub-minute, and minute boundaries cleanly", () => {
+    expect(formatDuration(null)).toBe("—");
+    expect(formatDuration(undefined)).toBe("—");
+    expect(formatDuration(0)).toBe("0s");
+    expect(formatDuration(30)).toBe("30s");
+    expect(formatDuration(60)).toBe("1 min");
+    expect(formatDuration(90)).toBe("1 min 30s");
+  });
+
+  it("preserves one-decimal backend durations without rounding 59.9s to 60s or 119.9s to 1 min 60s", () => {
+    expect(formatDuration(59.9)).toBe("59.9s");
+    expect(formatDuration(119.9)).toBe("1 min 59.9s");
+    expect(formatDuration(60.5)).toBe("1 min 0.5s");
+    expect(formatDuration(59.99)).toBe("1 min");
+    expect(formatDuration(119.99)).toBe("2 min");
   });
 });
 

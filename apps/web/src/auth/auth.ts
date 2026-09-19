@@ -20,6 +20,7 @@ export async function completeSignIn(): Promise<User> {
   window.history.replaceState({}, document.title, returnTo);
   return user;
 }
+export function isCognitoConfigured(): boolean { return Boolean(config()); }
 export async function getCurrentUser() { const settings = config(); if (!settings) return null; return getManager().getUser(); }
 export async function getStoredAccessToken() { const user = await getCurrentUser(); if (!user || user.expired) return null; return user.access_token; }
 export async function signOut() { sessionStorage.removeItem(RETURN_TO_KEY); await getManager().signoutRedirect(); }
