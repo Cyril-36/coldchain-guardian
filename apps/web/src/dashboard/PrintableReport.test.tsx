@@ -13,4 +13,34 @@ describe("PrintableReport", () => {
       expect(text).toContain(section);
     }
   });
+
+  it("selects reference sensor and formats sub-minute durations without flooring to 0 min", () => {
+    const customSnapshot = {
+      ...demoSnapshot,
+      sensors: [demoSnapshot.sensors[1], demoSnapshot.sensors[0]],
+    };
+    const customReport = {
+      ...demoReport,
+      measurements: [
+        {
+          ...demoReport.measurements[0],
+          sensor_id: demoSnapshot.sensors[1].sensor_id,
+          observed_max_c: 19.0,
+          estimated_out_of_range_seconds: 500,
+        },
+        {
+          ...demoReport.measurements[0],
+          sensor_id: demoSnapshot.sensors[0].sensor_id,
+          observed_max_c: 9.1,
+          estimated_out_of_range_seconds: 30,
+        },
+      ],
+    };
+
+    const element = PrintableReport({ run: demoRun, snapshot: customSnapshot, report: customReport });
+    const text = JSON.stringify(element);
+    expect(text).toContain("9.1°C");
+    expect(text).toContain("30s");
+    expect(text).not.toContain("0 min");
+  });
 });
