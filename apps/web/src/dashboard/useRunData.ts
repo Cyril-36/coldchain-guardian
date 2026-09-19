@@ -35,6 +35,22 @@ const fixtureDemoSummaries: DemoRunSummary[] = Object.values(mockCases).map((c) 
   label: c.label,
 }));
 
+/** Whether initial state must be API mode rather than fixture mode.
+ *
+ * Fixture mode is possible only outside production. A production build with no
+ * VITE_API_BASE_URL must start in API state and go straight to the configuration
+ * error, rather than painting fixture telemetry until the first effect runs. That
+ * keeps the whole fixture-leak family impossible in a deployed bundle instead of
+ * relying on each render path to gate itself.
+ *
+ * Exported for testing: this decides the useState initializer, and initial state is
+ * not observable through renderHook, which flushes effects before assertions.
+ */
+export function shouldStartInApiMode(runId: string | null): boolean {
+  if (import.meta.env.PROD) return true;
+  return Boolean(runId || import.meta.env.VITE_API_BASE_URL);
+}
+
 export function useRunData(): RunData {
   const auth = useAuth();
   const [retryNonce, setRetryNonce] = useState(0);
@@ -43,7 +59,7 @@ export function useRunData(): RunData {
   const initialRunId = getRunIdFromUrl();
   const initialCaseId = getCaseIdFromUrl() ?? "door";
   const initialFixture = mockCases[initialCaseId] ?? mockCases.door;
-  const isApiInitial = Boolean(initialRunId || import.meta.env.VITE_API_BASE_URL);
+  const isApiInitial = shouldStartInApiMode(initialRunId);
 
   const [data, setData] = useState<RunData>({
     run: initialRunId ? { ...initialFixture.run, run_id: initialRunId } : initialFixture.run,
