@@ -330,11 +330,14 @@ def main() -> int:
     outputs_dir = out_dir / "outputs"
     outputs_dir.mkdir(parents=True, exist_ok=True)
 
+    written: list[Path] = []
+    written_repeats: list[Path] = []
+
     records = [run_case(case, proposer, model_id) for case in HOLDOUT]
     for record in records:
-        (outputs_dir / f"{record['case_id']}.json").write_text(
-            json.dumps(record, indent=2), encoding="utf-8"
-        )
+        path = outputs_dir / f"{record['case_id']}.json"
+        path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+        written.append(path)
 
     # Stability: one clear and one ambiguous case, two further attempts each.
     repeats: list[dict[str, Any]] = []
@@ -343,19 +346,17 @@ def main() -> int:
         for attempt in (2, 3):
             record = run_case(by_id[case_id], proposer, model_id)
             repeats.append(record)
-            (outputs_dir / f"{case_id}.attempt{attempt}.json").write_text(
-                json.dumps(record, indent=2), encoding="utf-8"
-            )
+            path = outputs_dir / f"{case_id}.attempt{attempt}.json"
+            path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+            written_repeats.append(path)
 
     # Scores are computed from what was written, not from what was in memory.
-    reloaded = [
-        json.loads(path.read_text(encoding="utf-8"))
-        for path in sorted(outputs_dir.glob("*.json"))
-        if ".attempt" not in path.name
-    ]
+    # Reloading exactly the files this run produced, rather than globbing the
+    # directory: reusing --out would otherwise mix in stale records from a previous
+    # run -- a renamed or removed case would keep being scored forever.
+    reloaded = [json.loads(path.read_text(encoding="utf-8")) for path in sorted(written)]
     reloaded_repeats = [
-        json.loads(path.read_text(encoding="utf-8"))
-        for path in sorted(outputs_dir.glob("*.attempt*.json"))
+        json.loads(path.read_text(encoding="utf-8")) for path in sorted(written_repeats)
     ]
 
     result = {
