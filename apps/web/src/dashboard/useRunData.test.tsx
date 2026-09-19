@@ -364,14 +364,18 @@ describe("useRunData polling, backoff, and tab visibility behaviors", () => {
 
     const { result, unmount } = renderHook(() => useRunData(), { wrapper });
 
-    // Initial state before fetch resolves must NOT leak fixture report
+    // Initial state before fetch resolves must NOT leak fixture report or demo runs
     expect(result.current.report).toBeNull();
     expect(result.current.reportReady).toBe(false);
+    expect(result.current.demoRuns).toEqual([]);
+    expect(result.current.selectedDemoId).toBeNull();
 
     await waitFor(() => {
       expect(result.current.snapshotReady).toBe(true);
       expect(result.current.reportReady).toBe(false);
       expect(result.current.report).toBeNull();
+      expect(result.current.demoRuns).toEqual([]);
+      expect(result.current.selectedDemoId).toBeNull();
     });
 
     unmount();

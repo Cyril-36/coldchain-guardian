@@ -475,28 +475,30 @@ export function DashboardPage() {
             </div>
             <p>Shipment intelligence &amp; investigation workspace</p>
           </div>
-          <label className="case-control">
-            <span>Demo case</span>
-            <select
-              aria-label="Demo case"
-              value={live.selectedDemoId ?? live.demoRuns[0]?.run_id ?? "door"}
-              onChange={(e) => {
-                const val = e.target.value;
-                if (live.source === "api") {
-                  navigation.assign(`${window.location.pathname}?demo_run_id=${encodeURIComponent(val)}`);
-                } else {
-                  navigation.assign(`${window.location.pathname}?case=${encodeURIComponent(val)}`);
-                }
-              }}
-              className="case-select"
-            >
-              {live.demoRuns.map((demo) => (
-                <option key={demo.run_id} value={demo.run_id}>
-                  {demo.label}
-                </option>
-              ))}
-            </select>
-          </label>
+          {!isProtectedRun && live.demoRuns.length > 0 && (
+            <label className="case-control">
+              <span>Demo case</span>
+              <select
+                aria-label="Demo case"
+                value={live.selectedDemoId ?? live.demoRuns[0]?.run_id ?? "door"}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (live.source === "api") {
+                    navigation.assign(`${window.location.pathname}?demo_run_id=${encodeURIComponent(val)}`);
+                  } else {
+                    navigation.assign(`${window.location.pathname}?case=${encodeURIComponent(val)}`);
+                  }
+                }}
+                className="case-select"
+              >
+                {live.demoRuns.map((demo) => (
+                  <option key={demo.run_id} value={demo.run_id}>
+                    {demo.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <button
             type="button"
             onClick={() => void handleRun()}

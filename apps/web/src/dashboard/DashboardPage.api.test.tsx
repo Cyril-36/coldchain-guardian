@@ -571,9 +571,17 @@ describe("DashboardPage API-backed interactions", () => {
     expect(screen.queryByText("Diagnostics")).not.toBeInTheDocument();
     expect(screen.queryByText(/00000000-0000-0000-0000-000000002042/)).not.toBeInTheDocument();
     expect(screen.queryByText("HYPOTHESIS SUPPORTED")).not.toBeInTheDocument();
-    expect(screen.queryByText("DOOR EXPOSURE")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Print investigation report" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Download" })).toBeDisabled();
+
+    // Demo case selector and fixture scenario options must be absent for protected runs
+    expect(screen.queryByLabelText("Demo case")).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Demo case" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Public door exposure demo")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Door exposure · Run/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Unresolved excursion/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Sensor disagreement/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No excursion control/)).not.toBeInTheDocument();
   });
 
   it("selects reference sensor over non-reference sensor and formats sub-minute excursion durations as seconds", async () => {
