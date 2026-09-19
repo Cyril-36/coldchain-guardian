@@ -23,12 +23,19 @@ def build_application_from_env() -> ApiApplication:
     )
     if not allowed:
         raise RuntimeError("ALLOWED_OPERATOR_SUBS must contain at least one operator subject")
+    # Default on; set RUNS_ENABLED=false to stop new runs without a redeploy of code.
+    runs_enabled = os.environ.get("RUNS_ENABLED", "true").strip().lower() not in {
+        "false",
+        "0",
+        "no",
+    }
     storage = AwsStorage(bucket_name=bucket, table_name=table)
     service = ApiService(storage, SqsQueueSender(queue_url))
     return ApiApplication(
         service,
         build_sha=os.environ.get("BUILD_SHA", "unknown"),
         allowed_operator_subs=allowed,
+        runs_enabled=runs_enabled,
     )
 
 

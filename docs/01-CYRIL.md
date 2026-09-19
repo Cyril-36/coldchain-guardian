@@ -22,7 +22,7 @@ Read [master plan](../PLAN.md), [contracts](CONTRACTS.md), and [release gates](V
 - Publish storage Protocol interfaces; let Harshith implement them. You own semantics, not his adapter code.
 - Publish a loopback-only local API harness using memory storage and a synthetic operator context, excluded from production packaging. This lets both teammates work without cloud accounts; follow TEAM-CLOUD-WORKFLOW.md.
 - Test the selected Bedrock model from a local AWS profile, then from the deployed worker role. Test one tool call and structured output, measure latency and log the model ID and package versions.
-- Lock versions and publish a shared .env.example containing names only. Backend: AWS_REGION, BEDROCK_MODEL_ID, TABLE_NAME, ARTIFACT_BUCKET, QUEUE_URL, MAX_RUNS_PER_DAY. Frontend receives only public IDs/URLs.
+- Lock versions and publish a shared .env.example containing names only. Backend: AWS_REGION, BEDROCK_MODEL_ID, RUNS_TABLE, ARTIFACT_BUCKET, INVESTIGATION_QUEUE_URL, ALLOWED_OPERATOR_SUBS, BUILD_SHA. (Earlier drafts of this list said TABLE_NAME and QUEUE_URL; the API, worker, infra/template.yaml and docs/API.md all use RUNS_TABLE and INVESTIGATION_QUEUE_URL, so those are the names. A daily run cap is enforced in storage rather than through a MAX_RUNS_PER_DAY variable.) Frontend receives only public IDs/URLs.
 
 If the first model fails, distinguish access/region failure from model-quality failure. Fix the role/region or select one supported Bedrock model and rerun the same probe. Do not spend the weekend cycling models. If Bedrock remains unavailable, finish a clearly labeled deterministic AWS workflow and report the reduced AI scope.
 

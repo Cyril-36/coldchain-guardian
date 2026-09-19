@@ -70,8 +70,10 @@ class ApiApplication:
         *,
         build_sha: str = "unknown",
         allowed_operator_subs: frozenset[str] | None = None,
+        runs_enabled: bool = True,
     ) -> None:
         self.service = service
+        self.runs_enabled = runs_enabled
         self.build_sha = build_sha
         self.allowed_operator_subs = allowed_operator_subs
 
@@ -209,6 +211,20 @@ class ApiApplication:
             self._operator(event, require_write=False)
             return HttpResponse(200, self.service.scenarios())
         if method == "POST" and path == "/v1/runs":
+            # Server-side kill switch (docs/01-CYRIL.md): stop new runs without
+            # disabling review or reading completed reports. Checked before auth so a
+            # disabled deployment cannot be probed for valid operator subjects, and
+            # before any storage or queue work so it costs nothing.
+            if not self.runs_enabled:
+                raise ApiRequestError(
+                    503,
+                    "runs_disabled",
+                    "New investigations are temporarily disabled. Existing reports "
+                    "remain readable.",
+                    # Temporary by construction: the same request succeeds once the
+                    # switch is turned back on.
+                    retryable=True,
+                )
             owner_sub = self._operator(event, require_write=True)
             body = self._body(event)
             if isinstance(body, dict):
