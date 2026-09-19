@@ -331,45 +331,51 @@ export function DashboardPage() {
 
   const run = live.source === "api" ? live.run : (live.run ?? demoRun);
   const snapshot = live.source === "api" ? live.snapshot : (live.snapshot ?? demoSnapshot);
-  const report = live.source === "api" ? live.report : (live.report ?? demoReport);
   const isPublicDemo = live.source === "api" && !live.protectedRun;
   const isProtectedRun = live.source === "api" && live.protectedRun;
   const isReportReady =
     live.source === "api"
-      ? (live.run.status === "completed" || live.run.status === "needs_review") && live.snapshotReady && live.reportReady
-      : true;
+      ? (live.run.status === "completed" || live.run.status === "needs_review") &&
+        live.snapshotReady &&
+        live.reportReady &&
+        Boolean(live.report)
+      : Boolean(live.report ?? demoReport);
+  const report = isReportReady ? (live.source === "api" ? live.report : (live.report ?? demoReport)) : null;
   const referenceSensor = snapshot.sensors.find((sensor) => sensor.role === "reference");
-  const primaryMeasurement = report.measurements.find((m) => m.sensor_id === referenceSensor?.sensor_id) ?? report.measurements[0];
+  const primaryMeasurement = report
+    ? (report.measurements.find((m) => m.sensor_id === referenceSensor?.sensor_id) ?? report.measurements[0])
+    : null;
   const refReadings = snapshot.readings.filter((r) => r.sensor_id === referenceSensor?.sensor_id);
   const snapshotPeakC =
     refReadings.length > 0
       ? Math.max(...refReadings.map((r) => r.temperature_c))
       : (snapshot.readings.length > 0 ? Math.max(...snapshot.readings.map((r) => r.temperature_c)) : null);
   const observedPeak = isReportReady ? (primaryMeasurement?.observed_max_c ?? snapshotPeakC) : snapshotPeakC;
-  const copy = outcomeCopy(report);
-  const finding = report.hypotheses.find((item) => item.hypothesis === report.primary_hypothesis);
-  const unresolvedFinding = report.hypotheses.find((item) => item.assessment === "insufficient");
+  const copy = report ? outcomeCopy(report) : null;
+  const finding = report ? report.hypotheses.find((item) => item.hypothesis === report.primary_hypothesis) : null;
+  const unresolvedFinding = report ? report.hypotheses.find((item) => item.assessment === "insufficient") : null;
   const evidence =
     live.source === "api"
-      ? report.evidence
-      : (report.evidence.length > 0 ? report.evidence : fixtureEvidence(snapshot));
+      ? (report?.evidence ?? [])
+      : (report?.evidence && report.evidence.length > 0 ? report.evidence : fixtureEvidence(snapshot));
   const currentReview = actions.review ?? fixtureReview ?? run.review;
   const verificationCopy =
-    report.verification.status === "passed"
+    report?.verification.status === "passed"
       ? "Evidence references and measurements checked"
       : "Verification blocked";
 
   // Derive scenario / incident title without hardcoding or inventing
   const selectedDemo = live.demoRuns.find(
-    (d) => d.run_id === (live.selectedDemoId ?? live.demoRuns[0]?.run_id ?? run.run_id),
+    (d) => d.run_id === (live.selectedDemoId ?? (live.source === "fixture" ? live.demoRuns[0]?.run_id : null) ?? run.run_id),
   );
   const rawIncidentTitle =
-    selectedDemo?.label.replace(/ · Run \d+/, "").replace(/ demo$/i, "") ??
-    (report.primary_hypothesis
+    (live.source === "fixture" && selectedDemo?.label)
+      ? selectedDemo.label.replace(/ · Run \d+/, "").replace(/ demo$/i, "")
+      : (report?.primary_hypothesis
       ? `${report.primary_hypothesis.replace(/_/g, " ")} investigation`
-      : report.outcome === "unresolved"
+      : report?.outcome === "unresolved"
       ? "Unresolved excursion investigation"
-      : report.outcome === "no_excursion"
+      : report?.outcome === "no_excursion"
       ? "Normal control monitoring"
       : "Shipment temperature investigation");
   const incidentTitleFormatted = rawIncidentTitle.toUpperCase().includes("INVESTIGATION")
@@ -391,7 +397,7 @@ export function DashboardPage() {
   };
 
   const handleReview = async (decision: ReviewDecision) => {
-    if (!reviewNote.trim() || actions.reviewSubmitting || Boolean(currentReview)) return;
+    if (!reviewNote.trim() || actions.reviewSubmitting || Boolean(currentReview) || !report) return;
     setReviewDecision(null);
     if (live.source === "fixture") {
       const mockRev: Review = {
@@ -415,7 +421,7 @@ export function DashboardPage() {
   };
 
   const handleDownload = async () => {
-    if (!isPublicDemo && !isProtectedRun) return;
+    if ((!isPublicDemo && !isProtectedRun) || !isReportReady || !report) return;
     try {
       await actions.downloadReport(isPublicDemo);
     } catch {}
@@ -546,10 +552,10 @@ export function DashboardPage() {
               <strong>Cutoff</strong> {new Date(snapshot.cutoff_at).toLocaleDateString("en-GB")} · {formatTime(snapshot.cutoff_at)} UTC
             </span>
             <span className="context-pill context-pill--simulated">SIMULATED</span>
-            {isReportReady && report.generation_mode === "deterministic_only" && (
+            {isReportReady && report?.generation_mode === "deterministic_only" && (
               <span className="context-pill context-pill--deterministic">DETERMINISTIC ONLY</span>
             )}
-            {isReportReady && report.generation_mode === "bedrock" && (
+            {isReportReady && report?.generation_mode === "bedrock" && (
               <span className="context-pill context-pill--agent">BEDROCK AGENT</span>
             )}
           </div>
@@ -627,12 +633,12 @@ export function DashboardPage() {
                   ? "In progress"
                   : currentReview
                   ? `Reviewed · ${currentReview.decision.replace("_", " ")}`
-                  : report.review_required
+                  : report?.review_required
                   ? "Needs review"
                   : "No review required"
               }
               detail={!isReportReady ? (stageLabels[run.stage] ?? run.stage) : verificationCopy}
-              tone={!isReportReady ? "info" : report.review_required && !currentReview ? "review" : "info"}
+              tone={!isReportReady ? "info" : report?.review_required && !currentReview ? "review" : "info"}
             />
           </section>
 
@@ -729,7 +735,7 @@ export function DashboardPage() {
                   <span className="eyebrow">INVESTIGATION RESULT</span>
                   <h2>{!isReportReady ? "Investigation in progress" : "Main finding"}</h2>
                 </div>
-                {isReportReady && (
+                {isReportReady && report && (
                   <span
                     className={`mini-status ${
                       report.outcome === "unresolved"
@@ -748,7 +754,7 @@ export function DashboardPage() {
                 )}
               </div>
 
-              {!isReportReady ? (
+              {!isReportReady || !report || !copy ? (
                 <div className="mt-4">
                   <div className="flex items-center gap-2">
                     <span className="rounded bg-cyan-50 px-2 py-0.5 text-xs font-semibold text-cyan-800">
@@ -909,7 +915,7 @@ export function DashboardPage() {
                   <span className="eyebrow">EVIDENCE TRAIL</span>
                   <h2>Supporting &amp; conflicting evidence</h2>
                 </div>
-                <span className="mini-status">{evidence.length} citations</span>
+                <span className="mini-status">{isReportReady ? `${evidence.length} citations` : "Pending"}</span>
               </div>
 
               <div className="mt-4">
@@ -1134,29 +1140,29 @@ export function DashboardPage() {
             <article className="report-card">
               <div className="panel-head">
                 <div>
-                  <h2 className="text-base font-semibold">{isReportReady ? "Report ready" : "Report pending"}</h2>
+                  <h2 className="text-base font-semibold">{isReportReady && report ? "Report ready" : "Report pending"}</h2>
                   <p
                     className={`text-[10px] ${
-                      !isReportReady
+                      !isReportReady || !report
                         ? "text-slate-500"
                         : report.verification.status === "passed"
                         ? "text-green-700"
                         : "text-amber-700"
                     }`}
                   >
-                    {!isReportReady ? "Awaiting report generation" : verificationCopy}
+                    {!isReportReady || !report ? "Awaiting report generation" : verificationCopy}
                   </p>
                 </div>
                 <button
                   type="button"
-                  disabled={(!isPublicDemo && !isProtectedRun) || !isReportReady}
+                  disabled={(!isPublicDemo && !isProtectedRun) || !isReportReady || !report}
                   onClick={() => void handleDownload()}
                   className="rounded-md bg-[#123B5D] px-3 py-2 text-[11px] font-semibold text-white disabled:opacity-50 hover:bg-[#0F304C]"
                 >
                   Download
                 </button>
               </div>
-              {isReportReady && (
+              {isReportReady && report && (
                 <details className="mt-3">
                   <summary className="cursor-pointer text-[10px] font-semibold text-slate-600">
                     Diagnostics
@@ -1173,7 +1179,7 @@ export function DashboardPage() {
           </section>
         </div>
 
-        {isReportReady && (
+        {isReportReady && report && (
           <PrintableReport run={run} snapshot={snapshot} report={report} reviewOverride={currentReview} />
         )}
       </div>

@@ -570,6 +570,8 @@ describe("DashboardPage API-backed interactions", () => {
     expect(document.querySelector(".print-report")).not.toBeInTheDocument();
     expect(screen.queryByText("Diagnostics")).not.toBeInTheDocument();
     expect(screen.queryByText(/00000000-0000-0000-0000-000000002042/)).not.toBeInTheDocument();
+    expect(screen.queryByText("HYPOTHESIS SUPPORTED")).not.toBeInTheDocument();
+    expect(screen.queryByText("DOOR EXPOSURE")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Print investigation report" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Download" })).toBeDisabled();
   });

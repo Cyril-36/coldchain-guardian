@@ -9,7 +9,7 @@ import { demoReport, demoRun, demoSnapshot, mockCases } from "./mockData";
 export interface RunData {
   run: Run;
   snapshot: Snapshot;
-  report: Report;
+  report: Report | null;
   source: "api" | "fixture";
   protectedRun: boolean;
   snapshotReady: boolean;
@@ -43,20 +43,21 @@ export function useRunData(): RunData {
   const initialRunId = getRunIdFromUrl();
   const initialCaseId = getCaseIdFromUrl() ?? "door";
   const initialFixture = mockCases[initialCaseId] ?? mockCases.door;
+  const isApiInitial = Boolean(initialRunId || import.meta.env.VITE_API_BASE_URL);
 
   const [data, setData] = useState<RunData>({
     run: initialRunId ? { ...initialFixture.run, run_id: initialRunId } : initialFixture.run,
     snapshot: initialFixture.snapshot,
-    report: initialFixture.report,
-    source: initialRunId ? "api" : "fixture",
+    report: isApiInitial ? null : initialFixture.report,
+    source: isApiInitial ? "api" : "fixture",
     protectedRun: Boolean(initialRunId),
-    snapshotReady: !initialRunId,
-    reportReady: !initialRunId,
-    loading: Boolean(initialRunId),
+    snapshotReady: !isApiInitial,
+    reportReady: !isApiInitial,
+    loading: Boolean(isApiInitial),
     error: null,
     retry,
     demoRuns: fixtureDemoSummaries,
-    selectedDemoId: initialFixture.id,
+    selectedDemoId: isApiInitial ? null : initialFixture.id,
   });
 
   useEffect(() => {
@@ -67,7 +68,7 @@ export function useRunData(): RunData {
 
     if (!baseUrl) {
       if (import.meta.env.PROD) {
-        setData((current) => ({ ...current, protectedRun: false, source: "api", loading: false, snapshotReady: false, reportReady: false, error: new Error("API base URL is not configured"), retry }));
+        setData((current) => ({ ...current, protectedRun: false, source: "api", loading: false, snapshotReady: false, reportReady: false, report: null, error: new Error("API base URL is not configured"), retry }));
       } else if (!runId && !demoRunId) {
         const fixtureCase = mockCases[caseId ?? "door"] ?? mockCases.door;
         setData((current) => ({
@@ -78,6 +79,8 @@ export function useRunData(): RunData {
           protectedRun: false,
           source: "fixture",
           loading: false,
+          snapshotReady: true,
+          reportReady: true,
           error: null,
           demoRuns: fixtureDemoSummaries,
           selectedDemoId: fixtureCase.id,
@@ -88,8 +91,8 @@ export function useRunData(): RunData {
     }
 
     if (runId) {
-      if (auth.loading) { setData((current) => ({ ...current, protectedRun: true, source: "api", loading: true, snapshotReady: false, reportReady: false, error: null, retry })); return; }
-      if (!auth.authenticated) { setData((current) => ({ ...current, protectedRun: true, source: "api", loading: false, snapshotReady: false, reportReady: false, error: null, retry })); return; }
+      if (auth.loading) { setData((current) => ({ ...current, protectedRun: true, source: "api", loading: true, snapshotReady: false, reportReady: false, report: null, error: null, retry })); return; }
+      if (!auth.authenticated) { setData((current) => ({ ...current, protectedRun: true, source: "api", loading: false, snapshotReady: false, reportReady: false, report: null, error: null, retry })); return; }
     }
 
     let cancelled = false; let pollTimer: number | undefined; const startedAt = Date.now();
@@ -103,7 +106,7 @@ export function useRunData(): RunData {
       if (cancelled) return;
       const snapshotReady = snapshotResult.status === "fulfilled"; const reportReady = reportResult.status === "fulfilled";
       const artifactError = isTerminal(currentRun.status) && (!snapshotReady || !reportReady) ? new Error("Investigation artifacts are unavailable") : null;
-      setData((current) => ({ ...current, run: currentRun, snapshot: snapshotReady ? snapshotResult.value : current.snapshot, report: reportReady ? reportResult.value : current.report, source: "api", protectedRun: protectedRequest, snapshotReady, reportReady, loading: false, error: artifactError, retry }));
+      setData((current) => ({ ...current, run: currentRun, snapshot: snapshotReady ? snapshotResult.value : current.snapshot, report: reportReady ? reportResult.value : null, source: "api", protectedRun: protectedRequest, snapshotReady, reportReady, loading: false, error: artifactError, retry }));
     };
     const poll = async () => {
       if (cancelled || document.visibilityState === "hidden") return;
@@ -120,16 +123,16 @@ export function useRunData(): RunData {
     };
     const handleVisibilityChange = () => { clearPollTimer(); if (document.visibilityState === "visible" && runId) void poll(); };
     const initialiseProtected = async () => {
-      setData((current) => ({ ...current, protectedRun: true, source: "api", snapshotReady: false, reportReady: false, loading: true, error: null, retry }));
+      setData((current) => ({ ...current, protectedRun: true, source: "api", snapshotReady: false, reportReady: false, report: null, loading: true, error: null, retry }));
       try {
         const run = await api.getRun(runId!); if (cancelled) return;
         setData((current) => ({ ...current, run, source: "api", protectedRun: true, loading: true, error: null, retry }));
         await hydrateArtifacts(run, true); if (cancelled || isTerminal(run.status)) return;
         pollTimer = window.setTimeout(() => void poll(), ACTIVE_POLL_MS);
-      } catch (error: unknown) { if (!cancelled) setData((current) => ({ ...current, source: "api", protectedRun: true, snapshotReady: false, reportReady: false, loading: false, error: error instanceof Error ? error : new Error("Unable to load investigation data"), retry })); }
+      } catch (error: unknown) { if (!cancelled) setData((current) => ({ ...current, source: "api", protectedRun: true, snapshotReady: false, reportReady: false, report: null, loading: false, error: error instanceof Error ? error : new Error("Unable to load investigation data"), retry })); }
     };
     const initialisePublicDemo = async () => {
-      setData((current) => ({ ...current, protectedRun: false, source: "api", snapshotReady: false, reportReady: false, loading: true, error: null, retry }));
+      setData((current) => ({ ...current, protectedRun: false, source: "api", snapshotReady: false, reportReady: false, report: null, loading: true, error: null, retry }));
       try {
         const demos = await api.listDemoRuns();
         const selected = demoRunId ? demos.find((item) => item.run_id === demoRunId) : demos[0];
@@ -138,7 +141,7 @@ export function useRunData(): RunData {
         setData((current) => ({ ...current, demoRuns: demos, selectedDemoId: selected.run_id }));
         await hydrateArtifacts(run, false);
       } catch (error: unknown) {
-        if (!cancelled) setData((current) => ({ ...current, source: "api", protectedRun: false, snapshotReady: false, reportReady: false, loading: false, error: error instanceof Error ? error : new Error("Unable to load public demo") , retry }));
+        if (!cancelled) setData((current) => ({ ...current, source: "api", protectedRun: false, snapshotReady: false, reportReady: false, report: null, loading: false, error: error instanceof Error ? error : new Error("Unable to load public demo") , retry }));
       }
     };
 

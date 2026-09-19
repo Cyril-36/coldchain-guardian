@@ -107,6 +107,7 @@ describe("useRunData polling, backoff, and tab visibility behaviors", () => {
     await waitFor(() => {
       expect(result.current.run.status).toBe("running");
       expect(result.current.reportReady).toBe(false);
+      expect(result.current.report).toBeNull();
       // Verify initial active polling delay is exactly 2,000ms
       expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 2000);
     });
@@ -307,6 +308,7 @@ describe("useRunData polling, backoff, and tab visibility behaviors", () => {
       expect(getRunCount).toBe(1);
       expect(result.current.run.status).toBe("running");
       expect(result.current.reportReady).toBe(false);
+      expect(result.current.report).toBeNull();
     });
 
     // Reset setTimeoutSpy to count only polls scheduled after transition
@@ -322,11 +324,54 @@ describe("useRunData polling, backoff, and tab visibility behaviors", () => {
       expect(result.current.run.status).toBe("completed");
       expect(result.current.reportReady).toBe(true);
       expect(result.current.snapshotReady).toBe(true);
+      expect(result.current.report).toEqual(demoReport);
       // Verifies clearPollTimer was called
       expect(clearTimeoutSpy).toHaveBeenCalled();
       // Verifies NO new poll timer was scheduled after reaching terminal status
       expect(setTimeoutSpy).not.toHaveBeenCalledWith(expect.any(Function), 2000);
       expect(setTimeoutSpy).not.toHaveBeenCalledWith(expect.any(Function), 5000);
+    });
+
+    unmount();
+  });
+
+  it("never seeds report from fixture for API runs and keeps report strictly null while unready", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === `${API_BASE}/v1/runs/${RUN_ID}`) {
+        return new Response(JSON.stringify(inProgressRun), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url === `${API_BASE}/v1/runs/${RUN_ID}/snapshot`) {
+        return new Response(JSON.stringify(demoSnapshot), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url === `${API_BASE}/v1/runs/${RUN_ID}/report`) {
+        return new Response(
+          JSON.stringify({
+            error: { code: "REPORT_NOT_READY", message: "Not ready", request_id: "req-1", retryable: false },
+          }),
+          { status: 409, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      throw new Error(`Unexpected url: ${url}`);
+    });
+    globalThis.fetch = fetchMock as any;
+
+    const { result, unmount } = renderHook(() => useRunData(), { wrapper });
+
+    // Initial state before fetch resolves must NOT leak fixture report
+    expect(result.current.report).toBeNull();
+    expect(result.current.reportReady).toBe(false);
+
+    await waitFor(() => {
+      expect(result.current.snapshotReady).toBe(true);
+      expect(result.current.reportReady).toBe(false);
+      expect(result.current.report).toBeNull();
     });
 
     unmount();
