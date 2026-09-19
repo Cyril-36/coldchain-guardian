@@ -32,9 +32,10 @@ sys.path.insert(0, str(REPO_ROOT / "backend"))
 
 from coldchain.contracts.enums import NextCheckCode, Outcome  # noqa: E402
 from coldchain.contracts.schemas import Report, snapshot_sha256  # noqa: E402
+from coldchain.core.detector import build_detection_result  # noqa: E402
 from coldchain.investigation.agent import PROMPT_VERSION, investigate  # noqa: E402
 from eval.baseline import baseline_proposal  # noqa: E402
-from eval.holdout import HOLDOUT  # noqa: E402
+from eval.holdout import BY_ID, HOLDOUT  # noqa: E402
 
 DATASET_VERSION = "holdout-1.0.0"
 CLEAR_FAMILIES = {"door", "refrigeration", "sensor"}
@@ -151,6 +152,38 @@ def run_case(case: Any, proposer: Any, model_id: str | None) -> dict[str, Any]:
     }
 
 
+# Every measurement field the report publishes. A mismatch on any of them means a
+# number reached the report from somewhere other than the deterministic detector.
+_MEASUREMENT_FIELDS = (
+    "sensor_id",
+    "estimated_out_of_range_seconds",
+    "unknown_duration_seconds",
+    "observed_min_c",
+    "observed_max_c",
+    "censored_start",
+    "censored_end",
+    "coverage_status",
+    "sample_count",
+    "first_observed_out_at",
+    "last_observed_out_at",
+)
+
+
+def _measurements_match_detector(case_id: str, report: Report) -> bool:
+    """Recompute the detector from the frozen snapshot and compare the report to it."""
+    case = BY_ID.get(case_id)
+    if case is None:
+        return False
+    expected = {m.sensor_id: m for m in build_detection_result(case.snapshot()).measurements}
+    if {m.sensor_id for m in report.measurements} != set(expected):
+        return False
+    return all(
+        getattr(measurement, field) == getattr(expected[measurement.sensor_id], field)
+        for measurement in report.measurements
+        for field in _MEASUREMENT_FIELDS
+    )
+
+
 def score(records: list[dict[str, Any]]) -> dict[str, Any]:
     """Compute every metric by reading records back. Nothing here is hand-entered."""
     clear = [r for r in records if r["family"] in CLEAR_FAMILIES]
@@ -191,8 +224,13 @@ def score(records: list[dict[str, Any]]) -> dict[str, Any]:
             if ref.interval and ref.interval.end_at > report.cutoff_at:
                 citation_errors.append(record["case_id"])
 
-        # The report's numbers must be the detector's, not the model's.
+        # The report's numbers must be the detector's, not the model's. Checking the
+        # snapshot digest alone only proves the report refers to the right snapshot;
+        # it says nothing about whether the measurement fields match. Recompute the
+        # detector from the frozen case and compare field by field.
         if report.snapshot_sha256 != record["snapshot_sha256"]:
+            numeric_errors.append(record["case_id"])
+        elif not _measurements_match_detector(record["case_id"], report):
             numeric_errors.append(record["case_id"])
 
         text = " ".join(

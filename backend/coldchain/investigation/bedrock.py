@@ -213,6 +213,13 @@ class BedrockProposer:
                 "Your output is typed evidence selection, not narrative text."
             ),
             callback_handler=None,
+            # docs/01-CYRIL.md caps repair at one attempt inside the overall budget.
+            # None disables the SDK's default transient-retry strategy (6 attempts),
+            # so a throttle or 5xx cannot silently multiply model requests. This layer
+            # itself performs zero repairs: invalid structured output raises
+            # StructuredOutputError and the caller degrades. Whatever the SDK does
+            # within a single call stays bounded by limits.turns and the before-model
+            # hook, both of which draw on the same MAX_MODEL_CALLS budget.
             retry_strategy=None,
         )
         agent.add_hook(budget.before_model, BeforeModelCallEvent)

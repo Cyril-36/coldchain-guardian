@@ -189,3 +189,56 @@ def test_failed_agent_call_still_reports_the_requests_it_spent(monkeypatch) -> N
     # Tokens are unavailable without a returned result; they must read zero, not stale.
     assert proposer.last_stats.input_tokens == 0
     assert proposer.last_stats.output_tokens == 0
+
+
+def test_invalid_structured_output_degrades_without_a_second_attempt(monkeypatch) -> None:
+    """docs/01-CYRIL.md allows at most one repair attempt, then safe degradation.
+
+    This layer performs zero repairs: an output that fails the proposal schema raises
+    StructuredOutputError, which investigate() turns into a visible model_failed
+    report. The test pins that no additional model request is issued afterwards, so
+    the repair budget cannot be exceeded from here regardless of SDK behaviour.
+    """
+    import strands
+    import strands.models
+
+    from coldchain.investigation import bedrock as module
+
+    class FakeModel:
+        def __init__(self, **kwargs) -> None:
+            pass
+
+    class FakeAgent:
+        def __init__(self, **kwargs) -> None:
+            self.model_hooks: list = []
+            self.tool_hooks: list = []
+
+        def add_hook(self, callback, event_type=None, **kwargs) -> None:
+            name = getattr(event_type, "__name__", "")
+            (self.model_hooks if "Model" in name else self.tool_hooks).append(callback)
+
+        def __call__(self, *args, **kwargs):
+            for hook in self.model_hooks:
+                hook(SimpleNamespace(cancel=False))
+            for hook in self.tool_hooks:
+                hook(SimpleNamespace(cancel_tool=False))
+            # Schema-invalid: outcome is not a member of the Outcome enum.
+            return SimpleNamespace(
+                structured_output={"outcome": "definitely_the_door", "hypotheses": []},
+                metrics=SimpleNamespace(
+                    accumulated_usage={"inputTokens": 400, "outputTokens": 60}
+                ),
+            )
+
+    monkeypatch.setattr(strands, "Agent", FakeAgent)
+    monkeypatch.setattr(strands.models, "BedrockModel", FakeModel)
+
+    proposer = module.BedrockProposer("some-model", "us-east-1")
+    with pytest.raises(module.StructuredOutputError):
+        proposer(_context())
+
+    # Exactly one model request was spent, and no repair attempt followed it.
+    assert proposer.last_stats.model_calls == 1
+    # Usage from the failed proposal is still reported rather than discarded.
+    assert proposer.last_stats.input_tokens == 400
+    assert proposer.last_stats.output_tokens == 60
