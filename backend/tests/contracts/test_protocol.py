@@ -119,6 +119,9 @@ class DummyValidStorage:
     def list_public_runs(self) -> list[RunSummary]:
         raise NotImplementedError
 
+    def get_public_run(self, run_id: str) -> Run | None:
+        raise NotImplementedError
+
     def mark_queued(self, run_id: str) -> None:
         raise NotImplementedError
 

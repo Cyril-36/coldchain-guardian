@@ -1,8 +1,7 @@
 """Strict normalization for simulator-produced snapshots.
 
-This is intentionally scoped to the simulator. Cyril's canonical Pydantic
-contracts have not been published yet; this module can be replaced by an import
-of those models without introducing a second ``coldchain.contracts`` package.
+This module performs simulator-specific deduplication and ordering, then validates
+the result through the canonical Pydantic snapshot contract.
 """
 
 from __future__ import annotations
@@ -14,6 +13,10 @@ from copy import deepcopy
 from datetime import datetime
 from typing import Any
 from uuid import UUID
+
+from pydantic import ValidationError
+
+from coldchain.contracts import Snapshot
 
 SCHEMA_VERSION = "1.0"
 MAX_READINGS = 2_000
@@ -255,4 +258,7 @@ def normalize_snapshot(snapshot: Mapping[str, Any]) -> dict[str, Any]:
 
     if _serialized_size(normalized) > MAX_SERIALIZED_BYTES:
         raise SnapshotValidationError("snapshot exceeds the 1 MiB serialized JSON limit")
-    return normalized
+    try:
+        return Snapshot.model_validate(normalized).model_dump(mode="json")
+    except ValidationError as error:
+        raise SnapshotValidationError("snapshot violates the canonical v1 contract") from error

@@ -23,6 +23,7 @@ from coldchain.contracts.schemas import (
     StageEvent,
 )
 
+from .aws import AwsStorage
 from .exceptions import (
     ActiveRunLimitExceededError,
     ConditionalCheckFailedError,
@@ -37,6 +38,7 @@ from .exceptions import (
     TemporaryEnqueueError,
     TemporaryStorageError,
 )
+from .memory import MemoryStorage
 
 
 @runtime_checkable
@@ -179,6 +181,10 @@ class StorageProtocol(Protocol):
         """List curated public demonstration run summaries."""
         ...
 
+    def get_public_run(self, run_id: str) -> Run | None:
+        """Retrieve an explicitly curated public run, or None when absent/private."""
+        ...
+
     def mark_queued(self, run_id: str) -> None:
         """Conditionally transition status to queued if in pending_enqueue / preparing.
 
@@ -196,8 +202,10 @@ class StorageProtocol(Protocol):
 
 
 __all__ = [
-    # Protocols
+    # Protocols and adapters
     "ArtifactSignerProtocol",
+    "AwsStorage",
+    "MemoryStorage",
     "QueueSenderProtocol",
     "StorageProtocol",
     # Exceptions

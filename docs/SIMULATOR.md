@@ -20,7 +20,7 @@ The policy is illustrative for this synthetic demonstration. It is not a univers
 
 Telemetry depends only on the scenario configuration, integer seed and fixed UTC base timestamp. The generator uses a local `random.Random(seed)` instance and never reads the wall clock or changes global random state. The same inputs reproduce the same readings and events. Different seeds vary bounded noise and selected event timing while preserving scenario invariants.
 
-Callers may supply snapshot and shipment UUIDs. When omitted, deterministic opaque UUIDs are generated for local use. The API control layer will eventually allocate these IDs as part of run creation.
+Callers may supply snapshot and shipment UUIDs. When omitted, deterministic opaque UUIDs are generated for local use. The API control layer allocates stable opaque IDs during run reservation and supplies them to the generator.
 
 ## Demonstration scenarios
 
@@ -36,11 +36,11 @@ These descriptions are generator controls and public catalogue metadata. They ar
 
 ## Bounded noise
 
-Each reading receives small seeded noise bounded to ±0.16 °C. Scenario profiles have sufficient margin so tested seeds cannot push the normal control outside its policy range, erase required incident excursions, make the stable sensor anomalous, or add causal evidence to the ambiguous case. Behavioural tests cover 20 seeds per scenario; this is engineering fixture coverage, not a claim about physical sensor behaviour.
+Each reading receives small seeded noise bounded to ±0.16 °C. Scenario profiles have sufficient margin so tested seeds cannot push the normal control outside its policy range, erase required incident excursions, make the stable sensor anomalous, or add causal evidence to the ambiguous case. Behavioural tests cover 50 seeds per scenario; this is engineering fixture coverage, not a claim about physical sensor behaviour.
 
 ## Validation and normalization
 
-Simulator-side normalization currently enforces the documented v1 boundary:
+Simulator-side normalization enforces the documented v1 boundary and then validates the normalized result through the canonical Pydantic `Snapshot` model:
 
 - exact fields and schema version;
 - UUID identifiers and exactly one reference sensor;
@@ -52,7 +52,7 @@ Simulator-side normalization currently enforces the documented v1 boundary:
 - deterministic ordering by timestamp and event ID; and
 - deduplication of identical IDs with rejection of conflicting duplicates.
 
-This validator is isolated under `coldchain.simulator`. Cyril's canonical Pydantic schemas have not yet been published. Once available, generation should validate through those schemas and retain these behavioural tests; no competing permanent contracts package has been created here.
+Simulator-specific code remains responsible for deterministic sorting and deduplication before canonical validation. It does not define a competing contract model.
 
 ## Hidden-label protection
 
