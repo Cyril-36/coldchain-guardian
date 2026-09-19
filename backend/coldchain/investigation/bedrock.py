@@ -74,6 +74,17 @@ class _Budget:
         self.tool_calls += 1
 
 
+def _stats_from(budget: _Budget, result: Any) -> InvocationStats:
+    """Build stats from the live budget counters, plus tokens when a result exists."""
+    usage = getattr(getattr(result, "metrics", None), "accumulated_usage", None) or {}
+    return InvocationStats(
+        model_calls=budget.model_calls,
+        tool_calls=budget.tool_calls,
+        input_tokens=int(usage.get("inputTokens") or 0),
+        output_tokens=int(usage.get("outputTokens") or 0),
+    )
+
+
 def _result_evidence_ids(result: dict[str, Any]) -> list[str]:
     """Record IDs actually returned to the model, capped for the visible trace."""
     found: list[str] = []
@@ -218,6 +229,7 @@ class BedrockProposer:
         timer = threading.Timer(remaining, cancel_signal.set)
         timer.daemon = True
         timer.start()
+        result: Any = None
         try:
             result = agent(
                 prompt,
@@ -227,13 +239,13 @@ class BedrockProposer:
             )
         finally:
             timer.cancel()
-        usage = getattr(getattr(result, "metrics", None), "accumulated_usage", None) or {}
-        self.last_stats = InvocationStats(
-            model_calls=budget.model_calls,
-            tool_calls=budget.tool_calls,
-            input_tokens=int(usage.get("inputTokens") or 0),
-            output_tokens=int(usage.get("outputTokens") or 0),
-        )
+            # Recorded on every path. An invocation that fails part-way through the
+            # agent loop has still spent real Bedrock requests, and reporting them as
+            # zero understates cost exactly as badly as double-counting overstates it.
+            # The budget counters are live regardless of how the call ended; token
+            # usage is only available from a returned result, so it is best-effort.
+            self.last_stats = _stats_from(budget, result)
+
         if budget.exceeded or cancel_signal.is_set() or budget.tool_calls == 0:
             raise RuntimeError("investigation ended without required evidence within budget")
         try:

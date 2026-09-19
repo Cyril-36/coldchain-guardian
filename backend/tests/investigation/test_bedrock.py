@@ -125,3 +125,67 @@ def test_failed_invocation_does_not_reuse_the_previous_calls_statistics() -> Non
         proposer(object())
 
     assert proposer.last_stats == InvocationStats()
+
+
+def _context():
+    """A real ToolContext, because the proposer builds its prompt from live tools."""
+    from datetime import UTC, datetime
+
+    from coldchain.contracts.schemas import Snapshot
+    from coldchain.investigation.tools import ToolContext
+    from coldchain.simulator import generate_snapshot
+
+    snapshot = Snapshot.model_validate(
+        generate_snapshot("door_exposure", 17, datetime(2026, 9, 19, tzinfo=UTC))
+    )
+    return ToolContext(snapshot, run_id="eval-probe")
+
+
+def test_failed_agent_call_still_reports_the_requests_it_spent(monkeypatch) -> None:
+    """A part-way failure has already cost real Bedrock requests. Report them.
+
+    Reporting zero for a call that burned model requests understates cost exactly as
+    badly as double-counting overstates it, and the evaluation publishes this number
+    as what the run spent.
+    """
+    import strands
+    import strands.models
+
+    from coldchain.investigation import bedrock as module
+
+    class FakeModel:
+        def __init__(self, **kwargs) -> None:
+            pass
+
+    class FakeAgent:
+        def __init__(self, **kwargs) -> None:
+            self.model_hooks: list = []
+            self.tool_hooks: list = []
+
+        def add_hook(self, callback, event_type=None, **kwargs) -> None:
+            name = getattr(event_type, "__name__", "")
+            (self.model_hooks if "Model" in name else self.tool_hooks).append(callback)
+
+        def __call__(self, *args, **kwargs):
+            # Three model requests and two tool calls land, then the provider refuses.
+            for _ in range(3):
+                for hook in self.model_hooks:
+                    hook(SimpleNamespace(cancel=False))
+            for _ in range(2):
+                for hook in self.tool_hooks:
+                    hook(SimpleNamespace(cancel_tool=False))
+            raise RuntimeError("AccessDeniedException from the provider")
+
+    monkeypatch.setattr(strands, "Agent", FakeAgent)
+    monkeypatch.setattr(strands.models, "BedrockModel", FakeModel)
+
+    proposer = module.BedrockProposer("some-model", "us-east-1")
+    with pytest.raises(RuntimeError, match="AccessDenied"):
+        proposer(_context())
+
+    # Exactly what was spent before the refusal, not zero and not the previous call.
+    assert proposer.last_stats.model_calls == 3
+    assert proposer.last_stats.tool_calls == 2
+    # Tokens are unavailable without a returned result; they must read zero, not stale.
+    assert proposer.last_stats.input_tokens == 0
+    assert proposer.last_stats.output_tokens == 0
