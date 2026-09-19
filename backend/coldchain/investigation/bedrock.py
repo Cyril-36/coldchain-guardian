@@ -6,8 +6,11 @@ import json
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
+
+from pydantic import ValidationError
 
 from coldchain.investigation.tools import (
     ToolContext,
@@ -19,6 +22,25 @@ from coldchain.investigation.tools import (
     get_vehicle_events,
 )
 from coldchain.investigation.verifier import InvestigationProposal
+
+
+class StructuredOutputError(RuntimeError):
+    """The model answered but the answer did not satisfy the proposal schema.
+
+    Distinct from access, timeout and budget failures: those say nothing about output
+    quality, and counting them together would overstate the schema failure rate.
+    """
+
+
+@dataclass
+class InvocationStats:
+    """What one proposal actually cost, measured rather than inferred."""
+
+    model_calls: int = 0
+    tool_calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+
 
 MAX_MODEL_CALLS = 8
 MAX_TOOL_CALLS = 12
@@ -90,6 +112,8 @@ class BedrockProposer:
         self.region_name = region_name
         self.deadline = deadline
         self.on_tool = on_tool
+        # Stats from the most recent __call__, for evaluation and cost reporting.
+        self.last_stats = InvocationStats()
 
     def __call__(self, ctx: ToolContext) -> InvestigationProposal:
         from botocore.config import Config
@@ -198,6 +222,16 @@ class BedrockProposer:
             )
         finally:
             timer.cancel()
+        usage = getattr(getattr(result, "metrics", None), "accumulated_usage", None) or {}
+        self.last_stats = InvocationStats(
+            model_calls=budget.model_calls,
+            tool_calls=budget.tool_calls,
+            input_tokens=int(usage.get("inputTokens") or 0),
+            output_tokens=int(usage.get("outputTokens") or 0),
+        )
         if budget.exceeded or cancel_signal.is_set() or budget.tool_calls == 0:
             raise RuntimeError("investigation ended without required evidence within budget")
-        return InvestigationProposal.model_validate(result.structured_output)
+        try:
+            return InvestigationProposal.model_validate(result.structured_output)
+        except ValidationError as exc:
+            raise StructuredOutputError(str(exc)) from exc

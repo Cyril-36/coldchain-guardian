@@ -19,6 +19,14 @@ Parameters:
     Type: String
     Default: amazon.nova-lite-v1:0
     Description: Foundation model ID validated in this account and region
+  BedrockFoundationModelId:
+    Type: String
+    Default: amazon.nova-lite-v1:0
+    Description: >-
+      The underlying foundation model that BedrockModelId resolves to. A system-defined
+      inference profile such as us.amazon.nova-lite-v1:0 routes to a differently named
+      foundation model (amazon.nova-lite-v1:0), so the profile ID cannot be reused to
+      build the foundation-model ARN. Set this whenever BedrockModelId is a profile.
   EnableBedrock:
     Type: String
     Default: 'false'
@@ -26,6 +34,13 @@ Parameters:
       - 'true'
       - 'false'
     Description: Set true only after a successful model smoke test
+  RunsEnabled:
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: Set false to stop new investigations while leaving reports readable
   BuildSha:
     Type: String
     Default: local
@@ -169,6 +184,7 @@ Resources:
           RUNS_TABLE: !Ref RunTable
           INVESTIGATION_QUEUE_URL: !Ref InvestigationQueue
           ALLOWED_OPERATOR_SUBS: !Ref AllowedOperatorSubs
+          RUNS_ENABLED: !Ref RunsEnabled
           BUILD_SHA: !Ref BuildSha
       Policies:
         - Version: '2012-10-17'
@@ -298,11 +314,12 @@ Resources:
             # Granted only when Bedrock is enabled: the deterministic default must
             # not ship a permission it cannot use.
             #
-            # Both ARN shapes are required. A system-defined inference profile such as
-            # us.amazon.nova-lite-v1:0 is invoked through the inference-profile ARN,
-            # but Bedrock also authorizes against the underlying foundation model in
-            # each region the profile routes to, so granting only one of them fails
-            # with AccessDenied.
+            # Bedrock authorizes a profile invocation against the inference-profile
+            # ARN AND against each underlying foundation model, in every region the
+            # profile routes to. The profile ID cannot be reused to build the
+            # foundation-model ARN: us.amazon.nova-lite-v1:0 resolves to
+            # amazon.nova-lite-v1:0, so BedrockFoundationModelId is supplied
+            # separately. Granting only one shape fails with AccessDenied.
             - !If
               - BedrockEnabled
               - Effect: Allow
@@ -310,9 +327,10 @@ Resources:
                   - bedrock:InvokeModel
                   - bedrock:InvokeModelWithResponseStream
                 Resource:
-                  - !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${BedrockModelId}
-                  - !Sub arn:${AWS::Partition}:bedrock:*::foundation-model/${BedrockModelId}
                   - !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${BedrockModelId}
+                  # Wildcard region: a cross-region profile routes to the foundation
+                  # model in whichever region serves the request.
+                  - !Sub arn:${AWS::Partition}:bedrock:*::foundation-model/${BedrockFoundationModelId}
               - !Ref AWS::NoValue
       Events:
         Investigation:

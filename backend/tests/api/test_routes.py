@@ -344,3 +344,27 @@ def test_malformed_headers_and_non_string_body_are_rejected(api_factory) -> None
 
     assert app.handle(bad_headers)["statusCode"] == 422
     assert app.handle(bad_body)["statusCode"] == 422
+
+
+def test_runs_disabled_switch_blocks_creation_but_not_reading(api_factory) -> None:
+    """The kill switch stops new work without hiding completed reports.
+
+    docs/01-CYRIL.md requires a backend flag that disables new runs while leaving
+    existing reports readable, so cost can be capped without taking the demo down.
+    """
+    app, storage, _ = api_factory()
+    run_id = decode(_create(app))["run_id"]
+    complete_run(storage, run_id)
+
+    disabled, _, _ = api_factory(runs_enabled=False)
+
+    blocked = disabled.handle(event("POST", "/v1/runs", body={"scenario_id": "door_exposure"}))
+    assert blocked["statusCode"] == 503
+    assert decode(blocked)["error"]["code"] == "runs_disabled"
+    # Temporary, so a client is told it is worth retrying later.
+    assert decode(blocked)["error"]["retryable"] is True
+
+    # Reading still works on the disabled application, signed in and signed out.
+    assert disabled.handle(event("GET", "/v1/health"))["statusCode"] == 200
+    assert disabled.handle(event("GET", "/v1/demo-runs", subject=None))["statusCode"] == 200
+    assert disabled.handle(event("GET", "/v1/scenarios"))["statusCode"] == 200

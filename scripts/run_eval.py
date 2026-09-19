@@ -51,26 +51,55 @@ PROHIBITED_PHRASES = (
 
 
 class _CountingProposer:
-    """Wraps a proposer so invocations and failures are counted, not guessed.
+    """Wraps a proposer and records what the call actually cost.
 
-    `uses_model` keeps the rule baseline from being reported as model traffic: the
-    baseline is invoked exactly as often but costs nothing, and conflating the two
-    would overstate what the run spent.
+    Three things this deliberately does not do:
+
+    * It does not treat one proposal as one model request. A single proposal runs an
+      agent loop of up to MAX_MODEL_CALLS Bedrock requests, so proposer invocations
+      and model requests are reported as separate numbers.
+    * It does not report the rule baseline as model traffic. The baseline is invoked
+      just as often and costs nothing.
+    * It does not call every exception a structured-output failure. Only
+      StructuredOutputError means the model answered and the answer failed the schema;
+      access, timeout and budget failures say nothing about output quality.
     """
 
     def __init__(self, inner: Any, *, uses_model: bool) -> None:
         self.inner = inner
         self.uses_model = uses_model
         self.calls = 0
-        self.failures = 0
+        self.model_calls = 0
+        self.tool_calls = 0
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.structured_output_failures = 0
+        self.other_failures: list[str] = []
+
+    def _absorb_stats(self) -> None:
+        stats = getattr(self.inner, "last_stats", None)
+        if stats is None:
+            return
+        self.model_calls += stats.model_calls
+        self.tool_calls += stats.tool_calls
+        self.input_tokens += stats.input_tokens
+        self.output_tokens += stats.output_tokens
 
     def __call__(self, ctx: Any) -> Any:
         self.calls += 1
         try:
-            return self.inner(ctx)
-        except Exception:
-            self.failures += 1
+            result = self.inner(ctx)
+        except Exception as exc:
+            # Stats are recorded before the schema check, so a failed proposal still
+            # reports the requests and tokens it spent.
+            self._absorb_stats()
+            if type(exc).__name__ == "StructuredOutputError":
+                self.structured_output_failures += 1
+            else:
+                self.other_failures.append(type(exc).__name__)
             raise
+        self._absorb_stats()
+        return result
 
 
 def _git_sha() -> str:
@@ -110,8 +139,14 @@ def run_case(case: Any, proposer: Any, model_id: str | None) -> dict[str, Any]:
         "snapshot_sha256": snapshot_sha256(snapshot),
         "latency_seconds": latency,
         "proposer_invocations": counting.calls if counting else 0,
-        "model_invocations": (counting.calls if counting and counting.uses_model else 0),
-        "structured_output_failures": counting.failures if counting else 0,
+        # Real Bedrock requests, from the proposer's own budget counter -- not one
+        # per proposal, and zero when no model was involved.
+        "model_invocations": counting.model_calls if counting else 0,
+        "tool_calls": counting.tool_calls if counting else 0,
+        "input_tokens": counting.input_tokens if counting else 0,
+        "output_tokens": counting.output_tokens if counting else 0,
+        "structured_output_failures": counting.structured_output_failures if counting else 0,
+        "other_failures": counting.other_failures if counting else [],
         "report": report.model_dump(mode="json"),
     }
 
@@ -198,6 +233,12 @@ def score(records: list[dict[str, Any]]) -> dict[str, Any]:
         "prohibited_disposition_actions": sorted(set(disposition_errors)),
         "total_model_invocations": sum(r["model_invocations"] for r in records),
         "total_proposer_invocations": sum(r["proposer_invocations"] for r in records),
+        "total_tool_calls": sum(r["tool_calls"] for r in records),
+        "total_input_tokens": sum(r["input_tokens"] for r in records),
+        "total_output_tokens": sum(r["output_tokens"] for r in records),
+        "other_failures": sorted(
+            {name for r in records for name in r["other_failures"]}
+        ),
         "structured_output_failures": sum(r["structured_output_failures"] for r in records),
         "latency_seconds": {
             "total": round(sum(r["latency_seconds"] for r in records), 3),

@@ -42,6 +42,7 @@ def api_factory() -> Callable[..., tuple[ApiApplication, MemoryStorage, FakeQueu
         storage: MemoryStorage | None = None,
         snapshot_generator=None,
         allowed_operator_subs: frozenset[str] | None = None,
+        runs_enabled: bool = True,
     ):
         ids = count()
         storage = storage or MemoryStorage(
@@ -60,6 +61,7 @@ def api_factory() -> Callable[..., tuple[ApiApplication, MemoryStorage, FakeQueu
             ApiApplication(
                 service,
                 build_sha="abc123",
+                runs_enabled=runs_enabled,
                 allowed_operator_subs=(
                     allowed_operator_subs
                     if allowed_operator_subs is not None

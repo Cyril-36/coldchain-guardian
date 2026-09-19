@@ -6,7 +6,7 @@ WEB := apps/web
 REGION ?= $(AWS_REGION)
 MODEL ?= $(BEDROCK_MODEL_ID)
 
-.PHONY: help install test lint eval-offline eval-bedrock build probe-bedrock
+.PHONY: help install test lint eval-offline eval-bedrock build probe-bedrock reconcile
 
 help:
 	@grep -E '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | sed 's/:.*## /\t/'
@@ -38,6 +38,10 @@ eval-bedrock: ## Bounded live-model evaluation; must be enabled explicitly
 
 probe-bedrock: ## One bounded tool-call and structured-output probe
 	$(PY) scripts/probe_bedrock.py --region "$(REGION)" --model-id "$(MODEL)"
+
+reconcile: ## Dry-run DLQ/stale-run reconciliation (add APPLY=1 to make changes)
+	$(PY) scripts/reconcile_runs.py --table "$(RUNS_TABLE)" --bucket "$(ARTIFACT_BUCKET)" \
+	  --region "$(REGION)" --dlq-url "$(DLQ_URL)" $(if $(APPLY),--apply,)
 
 build: ## SAM build and frontend production build
 	sam build --template-file infra/template.yaml
