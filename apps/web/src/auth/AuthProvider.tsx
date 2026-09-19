@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { beginSignIn, completeSignIn, getStoredAccessToken, getCurrentUser, signOut as cognitoSignOut } from "./auth";
+import { beginSignIn, completeSignIn, getStoredAccessToken, getCurrentUser, isCognitoConfigured, signOut as cognitoSignOut } from "./auth";
 
 interface AuthContextValue {
   loading: boolean; authenticated: boolean; accessToken: string | null; error: Error | null;
@@ -11,9 +11,11 @@ function hasAuthCallback() { const params = new URLSearchParams(window.location.
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [error, setError] = useState<Error | null>(null);
-  const [loading, setLoading] = useState(true);
+  const needsAuthResolution = isCognitoConfigured() || hasAuthCallback();
+  const [loading, setLoading] = useState(needsAuthResolution);
 
   useEffect(() => {
+    if (!needsAuthResolution) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -26,7 +28,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } finally { if (!cancelled) setLoading(false); }
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [needsAuthResolution]);
 
   const signIn = useCallback(async () => { setError(null); await beginSignIn(); }, []);
   const signOut = useCallback(async () => { setAccessToken(null); setError(null); await cognitoSignOut(); }, []);
