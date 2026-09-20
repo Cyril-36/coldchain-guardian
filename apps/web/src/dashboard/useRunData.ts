@@ -8,6 +8,10 @@ import { demoReport, demoRun, demoSnapshot, mockCases } from "./mockData";
 
 export interface RunData {
   run: Run;
+  /** True once `run` came from the API rather than the fixture placeholder that
+   *  seeds initial state. The loading screen must not print a run id or stage
+   *  before this is true, or a production page shows a fixture UUID. */
+  runReady: boolean;
   snapshot: Snapshot;
   report: Report | null;
   source: "api" | "fixture";
@@ -63,6 +67,7 @@ export function useRunData(): RunData {
 
   const [data, setData] = useState<RunData>({
     run: initialRunId ? { ...initialFixture.run, run_id: initialRunId } : initialFixture.run,
+    runReady: !isApiInitial,
     snapshot: initialFixture.snapshot,
     report: isApiInitial ? null : initialFixture.report,
     source: isApiInitial ? "api" : "fixture",
@@ -90,6 +95,7 @@ export function useRunData(): RunData {
         setData((current) => ({
           ...current,
           run: fixtureCase.run,
+          runReady: true,
           snapshot: fixtureCase.snapshot,
           report: fixtureCase.report,
           protectedRun: false,
@@ -125,6 +131,7 @@ export function useRunData(): RunData {
       setData((current) => ({
         ...current,
         run: currentRun,
+        runReady: true,
         snapshot: snapshotReady ? snapshotResult.value : current.snapshot,
         report: reportReady ? reportResult.value : null,
         source: "api",
@@ -142,7 +149,7 @@ export function useRunData(): RunData {
       if (cancelled || document.visibilityState === "hidden") return;
       try {
         const run = await api.getRun(runId!); if (cancelled) return;
-        setData((current) => ({ ...current, run, source: "api", protectedRun: true, demoRuns: [], selectedDemoId: null, loading: false, error: null, retry }));
+        setData((current) => ({ ...current, run, runReady: true, source: "api", protectedRun: true, demoRuns: [], selectedDemoId: null, loading: false, error: null, retry }));
         if (isTerminal(run.status)) { clearPollTimer(); await hydrateArtifacts(run, true); return; }
         const delay = Date.now() - startedAt >= BACKOFF_AFTER_MS ? BACKOFF_POLL_MS : ACTIVE_POLL_MS; pollTimer = window.setTimeout(() => void poll(), delay);
       } catch (error: unknown) {
@@ -156,7 +163,7 @@ export function useRunData(): RunData {
       setData((current) => ({ ...current, protectedRun: true, source: "api", snapshotReady: false, reportReady: false, report: null, demoRuns: [], selectedDemoId: null, loading: true, error: null, retry }));
       try {
         const run = await api.getRun(runId!); if (cancelled) return;
-        setData((current) => ({ ...current, run, source: "api", protectedRun: true, demoRuns: [], selectedDemoId: null, loading: true, error: null, retry }));
+        setData((current) => ({ ...current, run, runReady: true, source: "api", protectedRun: true, demoRuns: [], selectedDemoId: null, loading: true, error: null, retry }));
         await hydrateArtifacts(run, true); if (cancelled || isTerminal(run.status)) return;
         pollTimer = window.setTimeout(() => void poll(), ACTIVE_POLL_MS);
       } catch (error: unknown) { if (!cancelled) setData((current) => ({ ...current, source: "api", protectedRun: true, snapshotReady: false, reportReady: false, report: null, demoRuns: [], selectedDemoId: null, loading: false, error: error instanceof Error ? error : new Error("Unable to load investigation data"), retry })); }
