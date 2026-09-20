@@ -18,7 +18,13 @@ capabilities = "CAPABILITY_IAM"
 resolve_s3 = true
 confirm_changeset = false
 fail_on_empty_changeset = false
-template_file = "infra/template.yaml"
+# Deliberately no template_file here. `sam deploy` must use the built template that
+# `sam build` writes to .aws-sam/build/, whose CodeUri points at directories with
+# dependencies installed. Pointing deploy at infra/template.yaml packages the raw
+# backend/ tree instead, producing a Lambda that starts and immediately fails with
+#   Runtime.ImportModuleError: No module named 'pydantic'
+# The failure is quiet: the stack reports UPDATE_COMPLETE, and a repeat deploy of the
+# same broken source hashes identically and reports "No changes to deploy".
 parameter_overrides = [
   "CognitoDomainPrefix=coldchain-guardian-892667",
   "AllowedOperatorSubs=placeholder-replace-after-first-deploy",
