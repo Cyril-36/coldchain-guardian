@@ -22,6 +22,11 @@ export interface RunData {
   error: Error | null;
   retry: () => void;
   demoRuns: DemoRunSummary[];
+  /** True when GET /v1/demo-runs succeeded and returned no curated runs. Distinct
+   *  from an error: the API is healthy, there is simply nothing published yet. The
+   *  first operator needs a way in, so this renders a dedicated empty state rather
+   *  than the loading/error skeleton. */
+  publicDemosEmpty: boolean;
   selectedDemoId: string | null;
 }
 const ACTIVE_POLL_MS = 2_000;
@@ -78,6 +83,7 @@ export function useRunData(): RunData {
     error: null,
     retry,
     demoRuns: isApiInitial ? [] : fixtureDemoSummaries,
+    publicDemosEmpty: false,
     selectedDemoId: isApiInitial ? null : initialFixture.id,
   });
 
@@ -172,10 +178,30 @@ export function useRunData(): RunData {
       setData((current) => ({ ...current, protectedRun: false, source: "api", snapshotReady: false, reportReady: false, report: null, loading: true, error: null, retry }));
       try {
         const demos = await api.listDemoRuns();
+        if (cancelled) return;
+        if (demos.length === 0 && !demoRunId) {
+          // The call succeeded; nothing is curated yet. Surfacing this as an error
+          // left the first operator with no sign-in or run-creation path at all.
+          setData((current) => ({
+            ...current,
+            source: "api",
+            protectedRun: false,
+            demoRuns: [],
+            selectedDemoId: null,
+            publicDemosEmpty: true,
+            snapshotReady: false,
+            reportReady: false,
+            report: null,
+            loading: false,
+            error: null,
+            retry,
+          }));
+          return;
+        }
         const selected = demoRunId ? demos.find((item) => item.run_id === demoRunId) : demos[0];
         if (!selected) throw new Error("No public demo runs are available");
         const run = await api.getDemoRun(selected.run_id); if (cancelled) return;
-        setData((current) => ({ ...current, demoRuns: demos, selectedDemoId: selected.run_id }));
+        setData((current) => ({ ...current, demoRuns: demos, selectedDemoId: selected.run_id, publicDemosEmpty: false }));
         await hydrateArtifacts(run, false);
       } catch (error: unknown) {
         if (!cancelled) setData((current) => ({ ...current, source: "api", protectedRun: false, snapshotReady: false, reportReady: false, report: null, loading: false, error: error instanceof Error ? error : new Error("Unable to load public demo") , retry }));
