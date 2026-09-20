@@ -277,6 +277,56 @@ export function DashboardPage() {
     );
   }
 
+  const handleRun = async () => {
+    try {
+      if (!auth.authenticated) {
+        await auth.signIn();
+        return;
+      }
+      await actions.createRun();
+    } catch {}
+  };
+
+  // A successful but empty public demo list. Rendered before the loading/error
+  // skeleton, which would otherwise leave the first operator with no way in: no
+  // sign-in, no run creation, just a spinner. No fixture data and no invented run id.
+  if (live.publicDemosEmpty) {
+    return (
+      <main className="min-h-screen bg-slate-50 text-slate-950 flex items-center justify-center p-6">
+        <div className="w-full max-w-[640px]">
+          <section className="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+            <p className="text-xs font-bold uppercase tracking-wider text-cyan-700">
+              ColdChain Guardian
+            </p>
+            <h1 className="mt-2 text-2xl font-bold tracking-tight">No public demos yet</h1>
+            <p className="mt-3 text-sm leading-6 text-slate-600">
+              No investigations have been published for public viewing. An operator can
+              sign in and run the first investigation against simulated cold-chain
+              telemetry; completed runs can then be published here.
+            </p>
+            <button
+              type="button"
+              onClick={() => void handleRun()}
+              disabled={auth.loading || actions.runCreating}
+              className="mt-6 inline-flex items-center justify-center rounded-lg bg-cyan-700 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-800 disabled:opacity-60"
+            >
+              {auth.loading
+                ? "Checking session…"
+                : actions.runCreating
+                  ? "Submitting run…"
+                  : auth.authenticated
+                    ? "Run investigation"
+                    : "Sign in to start investigation"}
+            </button>
+            {actions.error && (
+              <p className="mt-3 text-sm text-rose-700">{actions.error.message}</p>
+            )}
+          </section>
+        </div>
+      </main>
+    );
+  }
+
   if (live.source === "api" && !live.snapshotReady) {
     return (
       <main className="min-h-screen bg-slate-50 text-slate-950 flex items-center justify-center p-6">
@@ -396,16 +446,6 @@ export function DashboardPage() {
   // Partition supporting vs conflicting evidence
   const supportingIds = new Set(finding?.supporting_evidence_ids ?? []);
   const conflictingIds = new Set(finding?.conflicting_evidence_ids ?? []);
-
-  const handleRun = async () => {
-    try {
-      if (!auth.authenticated) {
-        await auth.signIn();
-        return;
-      }
-      await actions.createRun();
-    } catch {}
-  };
 
   const handleReview = async (decision: ReviewDecision) => {
     if (!reviewNote.trim() || actions.reviewSubmitting || Boolean(currentReview) || !report) return;

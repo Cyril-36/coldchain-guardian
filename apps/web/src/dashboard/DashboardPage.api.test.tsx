@@ -747,3 +747,135 @@ describe("loading screen fixture isolation", () => {
     expect(screen.queryByText(/is at the/i)).not.toBeInTheDocument();
   });
 });
+
+describe("first-run bootstrap: empty public demo list", () => {
+  const wrapper = ({ children }: { children: React.ReactNode }) => (
+    <AuthProvider>{children}</AuthProvider>
+  );
+  let originalFetch: typeof fetch;
+
+  const emptyDemoApi = () =>
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url === `${API_BASE}/v1/demo-runs`) {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ error: { code: "not_found" } }), { status: 404 });
+    }) as unknown as typeof fetch;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    window.history.replaceState({}, "", "/");
+    vi.stubEnv("VITE_API_BASE_URL", API_BASE);
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it("A. signed out, shows a sign-in call to action and no fixture data", async () => {
+    // Before this, an empty list was thrown as an error, so the page rendered the
+    // loading/error skeleton with no sign-in and no run-creation path. The first
+    // operator could never get in.
+    globalThis.fetch = emptyDemoApi();
+    vi.mocked(authModule.isCognitoConfigured).mockReturnValue(true);
+    vi.mocked(authModule.getStoredAccessToken).mockResolvedValue(null);
+    vi.mocked(authModule.getCurrentUser).mockResolvedValue(null);
+
+    render(<DashboardPage />, { wrapper });
+
+    expect(await screen.findByText(/No public demos yet/i)).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: /Sign in to start investigation/i }),
+    ).toBeInTheDocument();
+
+    // No fixture data of any kind reaches the screen.
+    const html = document.body.innerHTML;
+    expect(html).not.toContain(demoRun.run_id);
+    expect(html).not.toContain("Demo fixture mode");
+    expect(screen.queryByText(/is at the/i)).not.toBeInTheDocument();
+  });
+
+  it("A2. the sign-in button calls the existing auth flow", async () => {
+    globalThis.fetch = emptyDemoApi();
+    vi.mocked(authModule.isCognitoConfigured).mockReturnValue(true);
+    vi.mocked(authModule.getStoredAccessToken).mockResolvedValue(null);
+    vi.mocked(authModule.getCurrentUser).mockResolvedValue(null);
+
+    render(<DashboardPage />, { wrapper });
+
+    const button = await screen.findByRole("button", {
+      name: /Sign in to start investigation/i,
+    });
+    fireEvent.click(button);
+    await waitFor(() => expect(authModule.beginSignIn).toHaveBeenCalled());
+  });
+
+  it("B. authenticated, offers Run investigation instead", async () => {
+    globalThis.fetch = emptyDemoApi();
+    vi.mocked(authModule.isCognitoConfigured).mockReturnValue(true);
+    vi.mocked(authModule.getStoredAccessToken).mockResolvedValue("operator-valid-jwt");
+    vi.mocked(authModule.getCurrentUser).mockResolvedValue({
+      access_token: "operator-valid-jwt",
+      expired: false,
+    } as never);
+
+    render(<DashboardPage />, { wrapper });
+
+    expect(await screen.findByText(/No public demos yet/i)).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /Run investigation/i })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Sign in to start investigation/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("C. with curated demos present, the empty state does not appear", async () => {
+    // Guards against the new branch hijacking the normal public path.
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url === `${API_BASE}/v1/demo-runs`) {
+        return new Response(JSON.stringify(demoSummaries), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url === `${API_BASE}/v1/demo-runs/${demoSummaries[0].run_id}`) {
+        return new Response(JSON.stringify({ ...demoRun, run_id: demoSummaries[0].run_id }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url === `${API_BASE}/v1/demo-runs/${demoSummaries[0].run_id}/snapshot`) {
+        return new Response(JSON.stringify(demoSnapshot), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url === `${API_BASE}/v1/demo-runs/${demoSummaries[0].run_id}/report`) {
+        return new Response(JSON.stringify(demoReport), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ error: { code: "not_found" } }), { status: 404 });
+    }) as unknown as typeof fetch;
+
+    vi.mocked(authModule.isCognitoConfigured).mockReturnValue(true);
+    vi.mocked(authModule.getStoredAccessToken).mockResolvedValue(null);
+    vi.mocked(authModule.getCurrentUser).mockResolvedValue(null);
+
+    render(<DashboardPage />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.queryByText(/No public demos yet/i)).not.toBeInTheDocument();
+    });
+    expect(
+      screen.queryByRole("button", { name: /Sign in to start investigation/i }),
+    ).not.toBeInTheDocument();
+  });
+});
