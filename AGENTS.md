@@ -45,6 +45,17 @@ If documents disagree, call out the precise conflict in the PR and have Cyril re
 
 PRs target `main`. At least one other team member must approve before merging; the author cannot approve their own PR. Resolve review conversations and pass required CI checks. Cyril performs final integration and merge decisions. Review of Cyril's PRs should be done by Harshith or Navadeep. Do not bypass branch protection to save time.
 
+### Admin merge exception
+
+Branch protection no longer blocks repository admins, so the remaining discipline is a team rule rather than a technical control. A repository admin may merge a submission-day blocker PR without external approval only when all of the following hold:
+
+- required CI checks are green,
+- the diff has been reviewed,
+- the relevant tests pass,
+- and no failing required check is bypassed.
+
+Admin bypass can skip more than approvals. Never merge with a failing or pending required check, even when GitHub permits it. A doc-only or non-blocking change does not qualify for this exception; request a teammate review as usual. Record the reason for any admin merge in the PR description.
+
 ## Priority when time is short
 
 Required: one reliable end-to-end AWS investigation and honest uncertainty. Recommended soon: five scenario coverage, stronger evaluation and user feedback. Optional: map animation, IoT Core and multiple agents. Preserve a known-good main branch for the submission.
