@@ -318,8 +318,18 @@ export function DashboardPage() {
                     ? "Run investigation"
                     : "Sign in to start investigation"}
             </button>
+            {/* This is the first screen that exercises Cognito on a fresh deployment.
+                A callback failure sets auth.error, and swallowing it here would leave
+                an operator staring at a sign-in button with no explanation. */}
+            {auth.error && (
+              <p className="mt-3 text-sm text-rose-700" role="alert">
+                {auth.error.message}
+              </p>
+            )}
             {actions.error && (
-              <p className="mt-3 text-sm text-rose-700">{actions.error.message}</p>
+              <p className="mt-3 text-sm text-rose-700" role="alert">
+                {actions.error.message}
+              </p>
             )}
           </section>
         </div>

@@ -878,4 +878,29 @@ describe("first-run bootstrap: empty public demo list", () => {
       screen.queryByRole("button", { name: /Sign in to start investigation/i }),
     ).not.toBeInTheDocument();
   });
+
+  it("D. surfaces a Cognito callback failure instead of hiding it", async () => {
+    // The first deployed sign-in happens from this exact screen. Cognito redirects
+    // back with ?error=...; AuthProvider turns that into auth.error. If the empty
+    // state renders only actions.error, the operator sees a sign-in button and no
+    // explanation of why authentication just failed.
+    globalThis.fetch = emptyDemoApi();
+    vi.mocked(authModule.isCognitoConfigured).mockReturnValue(true);
+    vi.mocked(authModule.getStoredAccessToken).mockResolvedValue(null);
+    vi.mocked(authModule.getCurrentUser).mockResolvedValue(null);
+    // AuthProvider throws on the ?error= param before completeSignIn is reached,
+    // which is exactly how a real Cognito callback failure arrives.
+    window.history.replaceState(
+      {},
+      "",
+      "/?error=invalid_request&error_description=Cognito%20callback%20rejected%20the%20authorization%20code",
+    );
+
+    render(<DashboardPage />, { wrapper });
+
+    expect(await screen.findByText(/No public demos yet/i)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Cognito callback rejected the authorization code/i),
+    ).toBeInTheDocument();
+  });
 });
