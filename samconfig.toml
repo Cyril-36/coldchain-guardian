@@ -1,0 +1,31 @@
+# ColdChain Guardian deployment configuration.
+#
+# Two parameters are chicken-and-egg on a first deploy and are corrected afterwards:
+#   FrontendOrigin      needs the Amplify domain, which does not exist until the app is created
+#   AllowedOperatorSubs needs Cognito subject IDs, which do not exist until the pool is created
+# Deploy once with the placeholders below, then create the users and the Amplify app, then
+# redeploy with the real values. Deploying in the other order costs an extra redeploy.
+#
+# EnableBedrock stays false: invocation returns "Operation not allowed" for every Amazon
+# model in this account. See scripts/probe_bedrock.py before ever setting it true.
+
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "coldchain-guardian"
+region = "us-east-1"
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+confirm_changeset = false
+fail_on_empty_changeset = false
+template_file = "infra/template.yaml"
+parameter_overrides = [
+  "CognitoDomainPrefix=coldchain-guardian-892667",
+  "AllowedOperatorSubs=placeholder-replace-after-first-deploy",
+  "FrontendOrigin=http://localhost:5173",
+  "EnableBedrock=false",
+  "RunsEnabled=true",
+]
+
+[default.build.parameters]
+template_file = "infra/template.yaml"
