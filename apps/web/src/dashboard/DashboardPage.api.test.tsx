@@ -715,3 +715,35 @@ describe("DashboardPage API-backed interactions", () => {
     expect(screen.queryByText(/AI UNAVAILABLE/i)).not.toBeInTheDocument();
   });
 });
+
+describe("loading screen fixture isolation", () => {
+  const wrapper = ({ children }: { children: React.ReactNode }) => (
+    <AuthProvider>{children}</AuthProvider>
+  );
+
+  beforeEach(() => {
+    window.history.replaceState({}, "", "/");
+    vi.stubEnv("VITE_API_BASE_URL", API_BASE);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it("never prints a fixture run id or stage while waiting for real data", async () => {
+    // The loading screen used to read live.run.run_id, which before the first fetch
+    // resolves is the fixture placeholder seeding initial state. On a production page
+    // that displayed a fabricated run UUID while claiming a live AWS investigation.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise(() => {})), // never resolves: hold the loading state
+    );
+
+    render(<DashboardPage />, { wrapper });
+
+    expect(await screen.findByText(/Loading investigation data/i)).toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(demoRun.run_id, "i"))).not.toBeInTheDocument();
+    expect(screen.queryByText(/is at the/i)).not.toBeInTheDocument();
+  });
+});
