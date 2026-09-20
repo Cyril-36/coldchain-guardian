@@ -119,3 +119,18 @@ def test_bedrock_disabled_worker_supplies_the_rule_proposer(monkeypatch) -> None
     # model_id omitted == Bedrock disabled in the deployed configuration.
     assert process_message(message, storage) == "completed"
     assert len(seen) == 1
+
+
+def test_empty_bedrock_model_id_is_recorded_as_null() -> None:
+    """BEDROCK_MODEL_ID="" means no model, so the report must say null, not ""."""
+    storage = MemoryStorage()
+    message = _queued("door_exposure", storage)
+
+    assert process_message(message, storage, model_id="") == "completed"
+    run = storage.get_run(message.run_id)
+    assert run is not None and run.report_ref is not None
+    report = storage.get_report(run.report_ref)
+
+    assert report.model_id is None
+    assert report.generation_mode == "deterministic_only"
+    assert report.outcome == "hypothesis_supported"
