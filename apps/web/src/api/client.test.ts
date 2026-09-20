@@ -166,4 +166,38 @@ describe("default fetch binding", () => {
       globalThis.fetch = original;
     }
   });
+
+  // Regression: scenario_id was validated as a UUID, but the API catalogue uses
+  // names (backend/coldchain/api/service.py SCENARIO_CATALOGUE). Every call to
+  // /v1/scenarios therefore threw "Expected valid UUID format", and because the
+  // dashboard lists scenarios before creating a run, no run could ever start.
+  const catalogue = [
+    "normal_control",
+    "door_exposure",
+    "refrigeration_problem",
+    "sensor_disagreement",
+    "ambiguous_incident",
+  ];
+
+  it("accepts the named scenario ids the API actually returns", async () => {
+    const body = catalogue.map((scenario_id) => ({ scenario_id, label: scenario_id }));
+    const fetchImpl = async () =>
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    const client = new ApiClient({ baseUrl: "https://api.example.com", fetchImpl });
+    const scenarios = await client.get<{ scenario_id: string }[]>("/v1/scenarios");
+    expect(scenarios.map((entry) => entry.scenario_id)).toEqual(catalogue);
+  });
+
+  it("rejects an empty scenario id", async () => {
+    const fetchImpl = async () =>
+      new Response(JSON.stringify([{ scenario_id: "", label: "Empty" }]), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    const client = new ApiClient({ baseUrl: "https://api.example.com", fetchImpl });
+    await expect(client.get("/v1/scenarios")).rejects.toThrow(/Invalid API response/);
+  });
 });
