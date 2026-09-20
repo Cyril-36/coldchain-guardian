@@ -57,6 +57,10 @@ def process_message(
 ) -> str:
     """Return terminal/active_lease/completed; retry all infrastructure failures."""
     started = time.monotonic()
+    # BEDROCK_MODEL_ID is set to "" when Bedrock is disabled, and an empty string
+    # would be persisted verbatim as the report's model_id. "No model" is null, not
+    # "". Normalising here also keeps the proposer choice below consistent.
+    model_id = model_id or None
     run = storage.get_run(message.run_id)
     if run is None:
         raise TemporaryStorageError("queued run is missing")
