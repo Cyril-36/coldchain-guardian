@@ -2,6 +2,12 @@ export const SCHEMA_VERSION = "1.0" as const;
 
 export type SchemaVersion = typeof SCHEMA_VERSION;
 export type UUID = string;
+/**
+ * A server-defined scenario identifier such as `normal_control` or
+ * `door_exposure`. It is a name, not a UUID: the catalogue is owned by the API
+ * and the client must pass the value through unchanged rather than construct one.
+ */
+export type ScenarioId = string;
 export type ISODateTime = string;
 
 export type RunStatus =
@@ -201,7 +207,7 @@ export interface DemoRunSummary extends RunSummary {
 }
 
 export interface CreateRunRequest {
-  scenario_id: UUID;
+  scenario_id: ScenarioId;
   seed: number;
 }
 
@@ -212,7 +218,7 @@ export interface CreateRunResponse {
 }
 
 export interface Scenario {
-  scenario_id: UUID;
+  scenario_id: ScenarioId;
   label: string;
 }
 

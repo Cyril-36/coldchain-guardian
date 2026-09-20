@@ -379,7 +379,7 @@ describe("DashboardPage API-backed interactions", () => {
       }
       if (url === `${API_BASE}/v1/scenarios`) {
         return new Response(
-          JSON.stringify([{ scenario_id: "00000000-0000-0000-0000-000000000001", label: "Door sensor anomaly" }]),
+          JSON.stringify([{ scenario_id: "door_exposure", label: "Door exposure" }]),
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
@@ -417,7 +417,10 @@ describe("DashboardPage API-backed interactions", () => {
     // Validate Idempotency-Key header is a valid UUID
     const idempotencyKey = postHeaders?.get("Idempotency-Key");
     expect(idempotencyKey).toMatch(/^[0-9a-fA-F-]{36}$/);
-    expect(postBody.scenario_id).toBe("00000000-0000-0000-0000-000000000001");
+    // The catalogue id is a server-defined name, not a UUID. It must reach
+    // POST /v1/runs byte-for-byte: the API rejects anything outside its
+    // catalogue, so any rewriting or re-generation here fails the run.
+    expect(postBody.scenario_id).toBe("door_exposure");
     expect(typeof postBody.seed).toBe("number");
   });
 
