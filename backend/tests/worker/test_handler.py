@@ -9,6 +9,7 @@ from coldchain.contracts import QueueMessage, Snapshot
 from coldchain.contracts.enums import RunStatus
 from coldchain.contracts.schemas import snapshot_sha256
 from coldchain.core.detector import validate_snapshot
+from coldchain.investigation.agent import investigate
 from coldchain.simulator import generate_snapshot
 from coldchain.storage import MemoryStorage, TemporaryStorageError
 from coldchain.worker.handler import process_message
@@ -56,17 +57,39 @@ def test_normal_run_completes_once_without_model_work() -> None:
     assert calls == 0
 
 
-def test_model_unavailable_persists_reviewable_deterministic_report() -> None:
+def test_absent_proposer_still_degrades_visibly() -> None:
+    """The worker now always supplies a proposer, so this pins investigate() itself.
+
+    The degradation path stays reachable for any caller without a proposer, and it
+    must keep the deterministic measurements visible rather than hide them.
+    """
+    storage = MemoryStorage()
+    message = _queued("door_exposure", storage)
+    snapshot = storage.get_snapshot(storage.get_run(message.run_id).snapshot_ref)
+
+    report = investigate(snapshot, message.run_id, None)
+
+    assert report.outcome == "unresolved"
+    assert report.verification.status == "blocked"
+    assert report.verification.errors == ["model_unavailable"]
+    assert report.generation_mode == "deterministic_only"
+    assert any(m.estimated_out_of_range_seconds > 0 for m in report.measurements)
+
+
+def test_bedrock_disabled_run_is_explained_not_abandoned() -> None:
+    """The deployed configuration must reach a supported hypothesis, not needs_review."""
     storage = MemoryStorage()
     message = _queued("door_exposure", storage)
 
     assert process_message(message, storage) == "completed"
     run = storage.get_run(message.run_id)
-    assert run is not None and run.status == RunStatus.needs_review
+    assert run is not None and run.status == RunStatus.completed
     assert run.report_ref is not None
     report = storage.get_report(run.report_ref)
+    assert report.outcome == "hypothesis_supported"
+    assert report.primary_hypothesis == "door_exposure"
     assert report.generation_mode == "deterministic_only"
-    assert report.verification.status == "blocked"
+    assert report.verification.status == "passed"
     assert any(m.estimated_out_of_range_seconds > 0 for m in report.measurements)
 
 

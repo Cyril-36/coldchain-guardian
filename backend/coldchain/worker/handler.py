@@ -13,6 +13,7 @@ from coldchain.contracts import QueueMessage, StageEvent
 from coldchain.contracts.enums import Outcome, PublicStage, RunStatus, StageEventStatus
 from coldchain.investigation.agent import Proposer, investigate
 from coldchain.investigation.bedrock import BedrockProposer
+from coldchain.investigation.rule_proposer import rule_proposal
 from coldchain.storage import AwsStorage, StorageProtocol, TemporaryStorageError
 
 logger = logging.getLogger(__name__)
@@ -99,10 +100,18 @@ def process_message(
             ),
         )
 
-    if proposer is None and model_id and region_name:
-        proposer = BedrockProposer(
-            model_id, region_name, deadline=started + 90, on_tool=on_tool
-        )
+    if proposer is None:
+        if model_id and region_name:
+            proposer = BedrockProposer(
+                model_id, region_name, deadline=started + 90, on_tool=on_tool
+            )
+        else:
+            # Without Bedrock, fall back to the deterministic rule proposer rather
+            # than to no proposer at all. Passing None made investigate() return
+            # model_unavailable for every excursion, so the deployed system could
+            # detect but never explain. model_id stays None, so the report remains
+            # generation_mode=deterministic_only with model_id=null.
+            proposer = rule_proposal
     report = investigate(snapshot, run.run_id, proposer, model_id=model_id)
     if report.snapshot_sha256 != current.snapshot_ref.sha256:
         raise TemporaryStorageError("report snapshot digest differs from stored snapshot")
