@@ -136,3 +136,34 @@ describe("ApiClient", () => {
     });
   });
 });
+
+describe("default fetch binding", () => {
+  it("calls the global fetch with the correct receiver", async () => {
+    // Regression: the default was `options.fetchImpl ?? fetch`, stored on the instance
+    // and invoked as `this.fetchImpl(...)`. That makes the receiver the ApiClient
+    // rather than the global, and a native fetch rejects it with
+    //   TypeError: Failed to execute 'fetch' on 'Window': Illegal invocation
+    // Every other test injects a fetchImpl, so the default branch was never exercised
+    // and the suite passed against a client that could not make a single real request.
+    const receivers: unknown[] = [];
+    const original = globalThis.fetch;
+    globalThis.fetch = function (this: unknown) {
+      receivers.push(this);
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ status: "ok", schema_version: "1.0", build_sha: "test" }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    } as typeof fetch;
+
+    try {
+      const client = new ApiClient({ baseUrl: "https://api.example.com" });
+      await client.get("/v1/health");
+      expect(receivers).toHaveLength(1);
+      expect(receivers[0]).toBe(globalThis);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+});
