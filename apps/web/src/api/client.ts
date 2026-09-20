@@ -47,7 +47,7 @@ function schemaFor(path: string, method: string) {
 
 export class ApiClient {
   private readonly baseUrl: string; private readonly tokenProvider?: TokenProvider; private readonly fetchImpl: typeof fetch;
-  constructor(options: ApiClientOptions) { this.baseUrl = options.baseUrl; this.tokenProvider = options.tokenProvider; this.fetchImpl = options.fetchImpl ?? fetch; }
+  constructor(options: ApiClientOptions) { this.baseUrl = options.baseUrl; this.tokenProvider = options.tokenProvider; this.fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis); }
   async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
     const headers = new Headers(options.headers); headers.set("Accept", "application/json"); if (options.body !== undefined) headers.set("Content-Type", "application/json");
     const token = this.tokenProvider ? await this.tokenProvider() : null; if (token) headers.set("Authorization", `Bearer ${token}`);
