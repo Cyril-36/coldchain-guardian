@@ -213,12 +213,23 @@ Resources:
               Action: sqs:SendMessage
               Resource: !GetAtt InvestigationQueue.Arn
       Events:
-        Protected:
+        # Split from a single ANY route: ANY also matches the CORS preflight,
+        # which the browser sends without an Authorization header. The preflight
+        # then inherited DefaultAuthorizer and was rejected 401, so every
+        # authenticated call failed in the browser. API Gateway answers preflight
+        # automatically only when no route matches OPTIONS.
+        ProtectedGet:
           Type: HttpApi
           Properties:
             ApiId: !Ref HttpApi
             Path: /v1/{proxy+}
-            Method: ANY
+            Method: GET
+        ProtectedPost:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /v1/{proxy+}
+            Method: POST
         CreateRun:
           Type: HttpApi
           Properties:
