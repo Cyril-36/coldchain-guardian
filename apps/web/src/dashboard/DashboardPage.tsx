@@ -287,11 +287,22 @@ export function DashboardPage() {
               <p className="text-xs font-bold uppercase tracking-wider text-cyan-700">Live investigation</p>
             </div>
             <h1 className="mt-2 text-2xl font-bold tracking-tight">
-              {live.run.status === "failed" ? "Investigation failed" : "Investigation in progress"}
+              {!live.runReady
+                ? "Loading investigation"
+                : live.run.status === "failed"
+                  ? "Investigation failed"
+                  : "Investigation in progress"}
             </h1>
-            <p className="mt-2 text-sm leading-6 text-slate-600">
-              Run {live.run.run_id} is at the <span className="font-semibold text-slate-900">{stageLabels[live.run.stage] ?? live.run.stage}</span> stage.
-            </p>
+            {/* Until runReady, `live.run` is the fixture placeholder that seeds initial
+                state. Printing its id or stage here would show a fabricated run on a
+                production page, so the copy stays generic until real data arrives. */}
+            {live.runReady ? (
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                Run {live.run.run_id} is at the <span className="font-semibold text-slate-900">{stageLabels[live.run.stage] ?? live.run.stage}</span> stage.
+              </p>
+            ) : (
+              <p className="mt-2 text-sm leading-6 text-slate-600">Loading investigation data…</p>
+            )}
 
             {/* Skeleton loading preview */}
             <div className="mt-6 space-y-3 rounded-xl border border-slate-100 bg-slate-50/70 p-4" aria-hidden="true">

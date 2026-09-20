@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useRunData } from "./useRunData";
+import { shouldStartInApiMode, useRunData } from "./useRunData";
 import { AuthProvider } from "../auth/AuthProvider";
 import * as authModule from "../auth/auth";
 import { demoReport, demoSnapshot } from "./mockData";
@@ -379,5 +379,35 @@ describe("useRunData polling, backoff, and tab visibility behaviors", () => {
     });
 
     unmount();
+  });
+});
+
+describe("production fixture isolation", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("production always starts in API mode, even with no API base URL", () => {
+    // The defect: a production build whose VITE_API_BASE_URL was not set at build
+    // time started in fixture mode, so the dashboard painted fixture telemetry until
+    // the first effect replaced it with the configuration error. The skeleton guard
+    // in DashboardPage only fires for source "api" with snapshotReady false, so the
+    // initial state itself has to be API mode.
+    vi.stubEnv("PROD", true);
+    vi.stubEnv("VITE_API_BASE_URL", "");
+    expect(shouldStartInApiMode(null)).toBe(true);
+
+    vi.stubEnv("VITE_API_BASE_URL", API_BASE);
+    expect(shouldStartInApiMode(null)).toBe(true);
+    expect(shouldStartInApiMode(RUN_ID)).toBe(true);
+  });
+
+  it("outside production, fixture mode is still available for local development", () => {
+    vi.stubEnv("PROD", false);
+    vi.stubEnv("VITE_API_BASE_URL", "");
+    expect(shouldStartInApiMode(null)).toBe(false);
+
+    // A run id or a configured API still opts into API mode in development.
+    expect(shouldStartInApiMode(RUN_ID)).toBe(true);
+    vi.stubEnv("VITE_API_BASE_URL", API_BASE);
+    expect(shouldStartInApiMode(null)).toBe(true);
   });
 });
