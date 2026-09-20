@@ -286,7 +286,13 @@ Resources:
         - arm64
       Timeout: 120
       MemorySize: 1024
-      ReservedConcurrentExecutions: 2
+      # No ReservedConcurrentExecutions. This account currently has a reduced Lambda
+      # concurrent-execution quota of 10, and AWS refuses any reservation that leaves
+      # fewer than 10 unreserved, so reserving even 2 fails the stack with
+      # InvalidRequest. Raise the quota first if a reservation is ever wanted. Worker
+      # concurrency is still bounded to 2 by ScalingConfig.MaximumConcurrency on the
+      # SQS event source below, which is the more precise control anyway: it limits
+      # how many messages are processed at once rather than parking account capacity.
       Environment:
         Variables:
           ARTIFACT_BUCKET: !Ref ArtifactBucket
